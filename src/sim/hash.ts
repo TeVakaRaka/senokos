@@ -24,20 +24,45 @@ export function hashGame(g: Game): number {
   h = mixNumber(h, g.tick);
   h = mixNumber(h, g.over ? 1 : 0);
   h = mixNumber(h, g.rng.state);
-  const hero = g.hero;
-  h = mixNumber(h, hero.x);
-  h = mixNumber(h, hero.y);
-  h = mixNumber(h, hero.dir);
-  h = mixNumber(h, hero.speed);
-  h = mixNumber(h, hero.swingCd);
-  h = mixNumber(h, hero.load);
-  h = mixNumber(h, g.swings);
-  h = mixNumber(h, g.cutTufts);
-  h = mixNumber(h, g.cutKg);
-  h = mixNumber(h, g.stacked);
-  h = mixNumber(h, g.level);
-  for (let i = 0; i < g.perks.length; i++) h = mixNumber(h, g.perks[i]!);
-  if (g.offer) for (let i = 0; i < g.offer.length; i++) h = mixNumber(h, 100 + g.offer[i]!);
+
+  h = mixNumber(h, g.players.length);
+  for (let k = 0; k < g.players.length; k++) {
+    const p = g.players[k]!;
+    h = mixNumber(h, p.x);
+    h = mixNumber(h, p.y);
+    h = mixNumber(h, p.dir);
+    h = mixNumber(h, p.speed);
+    h = mixNumber(h, p.swingCd);
+    h = mixNumber(h, p.load);
+    h = mixNumber(h, p.tool);
+    h = mixNumber(h, p.toolCd);
+    h = mixNumber(h, p.crawl);
+    h = mixNumber(h, p.shield);
+    h = mixNumber(h, p.stacked);
+    h = mixNumber(h, p.delivered);
+    h = mixNumber(h, p.level);
+    for (let i = 0; i < p.perks.length; i++) h = mixNumber(h, p.perks[i]!);
+    if (p.offer) for (let i = 0; i < p.offer.length; i++) h = mixNumber(h, 100 + p.offer[i]!);
+    h = mixNumber(h, p.swings);
+    h = mixNumber(h, p.cutTufts);
+    h = mixNumber(h, p.cutKg);
+    h = mixNumber(h, p.hits);
+    h = mixNumber(h, p.hurt);
+    h = mixNumber(h, p.stolen);
+    h = mixNumber(h, p.knocked);
+    h = mixNumber(h, p.robbed);
+  }
+
+  h = mixNumber(h, g.nextDropId);
+  h = mixNumber(h, g.drops.length);
+  for (let k = 0; k < g.drops.length; k++) {
+    const d = g.drops[k]!;
+    h = mixNumber(h, d.id);
+    h = mixNumber(h, d.x);
+    h = mixNumber(h, d.y);
+    h = mixNumber(h, d.kg);
+  }
+
   const f = g.field;
   h = mixNumber(h, f.standing);
   for (let i = 0; i < f.count; i++) {

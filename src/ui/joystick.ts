@@ -1,8 +1,9 @@
-// Управление одним пальцем: коснулся в любом месте — там появился джойстик, повёл — герой идёт.
+// Управление одним пальцем: коснулся в любом месте — там появился джойстик и стоит на этом
+// месте, пока палец не отпущен; повёл от него — герой идёт в эту сторону.
 // На компьютере работают мышь и клавиши WASD / стрелки.
 
 const DEAD_ZONE = 8; // пикселей: меньше — считаем, что палец просто лежит
-const MAX_RADIUS = 56; // дальше палец «тащит» джойстик за собой
+const MAX_RADIUS = 56; // радиус основы: дальше ручка не рисуется
 
 export class Joystick {
   /** Направление в экранных осях: x вправо, y вверх. Длина 0 (нет ввода) или 1. */
@@ -67,17 +68,11 @@ export class Joystick {
   }
 
   private move(px: number, py: number): void {
-    let dx = px - this.originX;
-    let dy = py - this.originY;
+    // Основа стоит там, где палец коснулся экрана, и за пальцем не едет: направление
+    // всегда считается от этой точки.
+    const dx = px - this.originX;
+    const dy = py - this.originY;
     const len = Math.hypot(dx, dy);
-    if (len > MAX_RADIUS) {
-      // Джойстик едет за пальцем: менять направление можно не возвращаясь к центру.
-      const pull = (len - MAX_RADIUS) / len;
-      this.originX += dx * pull;
-      this.originY += dy * pull;
-      dx = px - this.originX;
-      dy = py - this.originY;
-    }
     if (len > DEAD_ZONE) {
       this.x = dx / len;
       this.y = -dy / len;
@@ -85,8 +80,10 @@ export class Joystick {
       this.x = 0;
       this.y = 0;
     }
+    // Ручка не выходит за край основы, даже если палец ушёл дальше.
+    const k = len > MAX_RADIUS ? MAX_RADIUS / len : 1;
     this.base.style.transform = `translate(${this.originX}px, ${this.originY}px)`;
-    this.knob.style.transform = `translate(${this.originX + dx}px, ${this.originY + dy}px)`;
+    this.knob.style.transform = `translate(${this.originX + dx * k}px, ${this.originY + dy * k}px)`;
   }
 
   private release(): void {

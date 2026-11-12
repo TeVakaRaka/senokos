@@ -67,11 +67,22 @@ export class PerkCards {
       card.className = 'perk';
       const level = levels[perk]! + 1;
       const pips = Array.from({ length: maxLevel }, (_, i) => `<i class="${i < level ? 'on' : ''}"></i>`).join('');
+      // Длина косы и ширина граблей на максимуме дают «синтез»: оба инструмента работают сразу.
+      let synth = '';
+      if (perk === PERK_REACH || perk === PERK_RAKE) {
+        const reach = levels[PERK_REACH]! + (perk === PERK_REACH ? 1 : 0);
+        const rake = levels[PERK_RAKE]! + (perk === PERK_RAKE ? 1 : 0);
+        synth =
+          reach >= maxLevel && rake >= maxLevel
+            ? '<em>Синтез! Коса и грабли заработают вместе</em>'
+            : `<em>К синтезу: коса ${reach}/${maxLevel}, грабли ${rake}/${maxLevel}</em>`;
+      }
       card.innerHTML = `
         <span class="perk-icon" aria-hidden="true">${text.icon}</span>
         <span class="perk-body">
           <b>${text.title}</b>
           <small>${text.describe(t)}</small>
+          ${synth}
           <span class="pips" aria-label="уровень ${level} из ${maxLevel}">${pips}</span>
         </span>`;
       card.addEventListener('click', () => {

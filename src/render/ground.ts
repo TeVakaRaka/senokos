@@ -1,10 +1,14 @@
-// Земля: плоскость с маской 256×256. Канал R — где скошено, канал G — где вообще росла трава.
-// Эта же маска позже даст картинку поля для экрана итогов.
+// Земля: плоскость с маской 256×256. Канал R — где скошено, G — где вообще росла трава,
+// B — где пролилась кровь (PvP). Эту же маску читает шейдер травы, чтобы окрасить
+// травинки, и она же позже даст картинку поля для экрана итогов.
 
 import * as THREE from 'three';
 import type { Look } from './look.ts';
 
 const RES = 256;
+
+/** Цвет крови на земле и на траве. */
+export const BLOOD_COLOR = 0x9c1512;
 
 const VERT = /* glsl */ `
 varying vec2 vXZ;
@@ -22,6 +26,7 @@ uniform vec3 uBare;
 uniform vec3 uUnder;
 uniform vec3 uMown;
 uniform vec3 uOutside;
+uniform vec3 uBlood;
 varying vec2 vXZ;
 
 float hash(vec2 p) {
@@ -31,9 +36,10 @@ float hash(vec2 p) {
 void main() {
   vec2 uv = vXZ / uSize;
   float inside = step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
-  vec2 m = texture2D(uMask, clamp(uv, 0.0, 1.0)).rg;
+  vec3 m = texture2D(uMask, clamp(uv, 0.0, 1.0)).rgb;
   vec3 col = mix(uBare, uUnder, m.g);
   col = mix(col, uMown, m.r * m.g);
+  col = mix(col, uBlood, smoothstep(0.08, 0.55, m.b) * 0.9);
   col = mix(uOutside, col, inside);
   // Крупная «мозаика» — чтобы земля не была ровной заливкой.
   col *= 0.95 + 0.1 * hash(floor(vXZ * 2.5));
@@ -44,16 +50,16 @@ void main() {
 
 export class Ground {
   readonly mesh: THREE.Mesh;
-  /** Маска: по два байта на точку (скошено, трава была). */
+  /** Маска: по четыре байта на точку (скошено, трава была, кровь, запас). */
   readonly data: Uint8Array;
-  private readonly texture: THREE.DataTexture;
+  readonly texture: THREE.DataTexture;
   private readonly size: number;
   private dirty = true;
 
   constructor(fieldSize: number, look: Look) {
     this.size = fieldSize;
-    this.data = new Uint8Array(RES * RES * 2);
-    this.texture = new THREE.DataTexture(this.data, RES, RES, THREE.RGFormat, THREE.UnsignedByteType);
+    this.data = new Uint8Array(RES * RES * 4);
+    this.texture = new THREE.DataTexture(this.data, RES, RES, THREE.RGBAFormat, THREE.UnsignedByteType);
     this.texture.magFilter = THREE.LinearFilter;
     this.texture.minFilter = THREE.LinearFilter;
     this.texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -70,6 +76,7 @@ export class Ground {
         uUnder: { value: new THREE.Color(look.groundUnder) },
         uMown: { value: new THREE.Color(look.groundMown) },
         uOutside: { value: new THREE.Color(look.groundOutside) },
+        uBlood: { value: new THREE.Color(BLOOD_COLOR) },
       },
     });
 
@@ -90,6 +97,11 @@ export class Ground {
     this.stamp(0, x, y, 0.5);
   }
 
+  /** Пятно крови. */
+  stampBlood(x: number, y: number, radius: number): void {
+    this.stamp(2, x, y, radius);
+  }
+
   private stamp(channel: number, x: number, y: number, radius: number): void {
     const scale = RES / this.size;
     const cx = x * scale;
@@ -104,7 +116,7 @@ export class Ground {
         const d = Math.hypot(px + 0.5 - cx, py + 0.5 - cy) / r;
         if (d >= 1) continue;
         const value = Math.min(255, Math.round((1 - d * d) * 420));
-        const idx = (py * RES + px) * 2 + channel;
+        const idx = (py * RES + px) * 4 + channel;
         if (value > this.data[idx]!) this.data[idx] = value;
       }
     }

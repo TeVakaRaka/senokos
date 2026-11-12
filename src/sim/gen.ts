@@ -1,5 +1,6 @@
 // Генерация поля дня из зерна: одно зерно — одно и то же поле у всех игроков.
 
+import { cosDeg, sinDeg } from './dmath.ts';
 import { buildField, GRASS_COUCH, GRASS_MEADOW, type Field } from './field.ts';
 import { hash3, Rng, valueNoise } from './rng.ts';
 import type { Tuning } from './tuning.ts';
@@ -10,39 +11,69 @@ export interface Rock {
   r: number;
 }
 
+export interface Point {
+  x: number;
+  y: number;
+}
+
 export interface Level {
   field: Field;
-  stackX: number;
-  stackY: number;
+  stacks: Point[]; // стог каждого игрока
+  starts: Point[]; // где игрок появляется
   rocks: Rock[];
-  heroX: number;
-  heroY: number;
 }
 
 export const STACK_RADIUS = 1.3; // стог как препятствие, м
 
-export function generateLevel(seed: number, t: Tuning): Level {
+/**
+ * Сторона поля для заданного числа игроков. Один или двое — как задано набором чисел;
+ * дальше площадь растёт вместе с числом игроков (на каждого — столько же, сколько в игре вдвоём).
+ */
+export function fieldSizeFor(base: number, playerCount: number): number {
+  if (playerCount <= 2) return base;
+  return Math.round((base * Math.sqrt(playerCount / 2)) / 2) * 2;
+}
+
+export function generateLevel(seed: number, t: Tuning, playerCount = 1): Level {
   const size = t.fieldSize;
   const rng = new Rng((seed ^ 0x9e3779b9) >>> 0);
 
-  // Стог — в средней части поля.
-  const stackX = size / 2 + rng.range(-4, 4);
-  const stackY = size / 2 + rng.range(-4, 4);
+  // Стоги. Один игрок — стог в средней части поля. Несколько — по кругу вокруг центра,
+  // друг напротив друга.
+  const stacks: Point[] = [];
+  if (playerCount <= 1) {
+    const x = size / 2 + rng.range(-4, 4);
+    const y = size / 2 + rng.range(-4, 4);
+    stacks.push({ x, y });
+  } else {
+    const ring = size * 0.25;
+    for (let i = 0; i < playerCount; i++) {
+      const angle = 180 + (360 * i) / playerCount;
+      stacks.push({
+        x: size / 2 + cosDeg(angle) * ring + rng.range(-1, 1),
+        y: size / 2 + sinDeg(angle) * ring + rng.range(-2.5, 2.5),
+      });
+    }
+  }
 
-  // Герой стартует рядом со стогом, на голой площадке.
-  const heroX = stackX + 1.9;
-  const heroY = stackY + 1.9;
+  // Игрок стартует рядом со своим стогом, на голой площадке.
+  const starts: Point[] = stacks.map((s) => ({ x: s.x + 1.9, y: s.y + 1.9 }));
 
-  // Камни: не у стога, не у края и не вплотную друг к другу.
+  // Камни: не у стогов, не у края и не вплотную друг к другу.
   const rocks: Rock[] = [];
+  const keepOut = t.stackClearRadius + 2;
   for (let attempt = 0; attempt < t.rockCount * 20 && rocks.length < t.rockCount; attempt++) {
     const x = rng.range(2, size - 2);
     const y = rng.range(2, size - 2);
     const r = rng.range(0.45, 0.85);
-    const ds = dist2(x, y, stackX, stackY);
-    const keepOut = t.stackClearRadius + 2;
-    if (ds < keepOut * keepOut) continue;
     let ok = true;
+    for (const s of stacks) {
+      if (dist2(x, y, s.x, s.y) < keepOut * keepOut) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
     for (const other of rocks) {
       if (dist2(x, y, other.x, other.y) < 9) {
         ok = false;
@@ -75,9 +106,15 @@ export function generateLevel(seed: number, t: Tuning): Level {
 
       const cover = 0.65 * valueNoise(seedCover, x / 7, y / 7) + 0.35 * valueNoise(seedDetail, x / 2.6, y / 2.6);
       if (cover < threshold) continue;
-      if (dist2(x, y, stackX, stackY) < clear2) continue;
 
       let blocked = false;
+      for (const s of stacks) {
+        if (dist2(x, y, s.x, s.y) < clear2) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
       for (const rock of rocks) {
         const keep = rock.r + 0.25;
         if (dist2(x, y, rock.x, rock.y) < keep * keep) {
@@ -97,7 +134,7 @@ export function generateLevel(seed: number, t: Tuning): Level {
     }
   }
 
-  return { field: buildField(size, xs, ys, types, hps), stackX, stackY, rocks, heroX, heroY };
+  return { field: buildField(size, xs, ys, types, hps), stacks, starts, rocks };
 }
 
 function dist2(ax: number, ay: number, bx: number, by: number): number {

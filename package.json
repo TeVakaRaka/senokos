@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "node tools/make-selftest.mjs && vite build",
     "preview": "vite preview --host",
+    "host": "npm run build && node tools/host.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "bot": "node tools/bot-run.mjs",

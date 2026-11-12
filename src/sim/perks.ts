@@ -1,8 +1,8 @@
-// Перки: улучшения внутри забега. Опыт — сено, выгруженное в стог. На каждом пороге
-// игра встаёт и предлагает 1 из 3 перков; выбор — отдельный ввод (CHOICE_BASE + номер карточки).
+// Улучшения внутри забега. Опыт — сено, привезённое в свой стог. На каждом пороге игра
+// встаёт и предлагает 1 из 3 улучшений; выбор — отдельный ввод (CHOICE_BASE + номер карточки).
 
 import { cosDeg } from './dmath.ts';
-import type { Game } from './game.ts';
+import type { Game, Player } from './game.ts';
 import { DT, TICK_RATE, type Tuning } from './tuning.ts';
 
 export const PERK_ARC = 0; // шире дуга
@@ -16,7 +16,7 @@ export const PERK_COUNT = 5;
 export const CHOICE_BASE = 65;
 export const OFFER_SIZE = 3;
 
-/** Числа, выведенные из набора баланса и уровней перков. */
+/** Числа, выведенные из набора баланса и уровней улучшений. */
 export interface Derived {
   reach: number;
   reach2: number;
@@ -28,6 +28,8 @@ export interface Derived {
   mowSpeed: number; // шаг косаря, м/с
   carryCap: number; // вместимость тюка, кг
   rakeRadius: number; // ширина граблей, м
+  /** «Синтез»: коса и грабли на максимуме работают вместе, менять инструмент не нужно. */
+  combo: boolean;
 }
 
 export function derive(t: Tuning, perks: readonly number[]): Derived {
@@ -48,10 +50,11 @@ export function derive(t: Tuning, perks: readonly number[]): Derived {
     mowSpeed: (t.stepFrac * reach) / (swingTicks * DT),
     carryCap: t.carryCap + perks[PERK_CARRY]! * t.carryPerLevel,
     rakeRadius: t.rakeRadius + perks[PERK_RAKE]! * t.rakePerLevel,
+    combo: perks[PERK_REACH]! >= t.perkMaxLevel && perks[PERK_RAKE]! >= t.perkMaxLevel,
   };
 }
 
-/** Сколько кг надо выгрузить в стог для перка номер level (с нуля). */
+/** Сколько кг надо привезти в стог для улучшения номер level (с нуля). */
 export function levelThreshold(t: Tuning, level: number): number {
   const list = t.levelKg;
   if (level < list.length) return list[level]!;
@@ -65,23 +68,23 @@ export function levelThreshold(t: Tuning, level: number): number {
   return last;
 }
 
-/** Набрал на перк — предложить выбор. Перки на максимуме не предлагаются. */
-export function checkLevel(g: Game): void {
-  while (g.offer === null && g.stacked >= levelThreshold(g.tuning, g.level)) {
-    const offer = makeOffer(g);
+/** Набрал на улучшение — предложить выбор. Улучшения на максимуме не предлагаются. */
+export function checkLevel(g: Game, p: Player): void {
+  while (p.offer === null && p.delivered >= levelThreshold(g.tuning, p.level)) {
+    const offer = makeOffer(g, p);
     if (offer.length === 0) {
-      g.level++; // всё уже на максимуме — порог засчитан без выбора
+      p.level++; // всё уже на максимуме — порог засчитан без выбора
       continue;
     }
-    g.offer = offer;
-    g.leveled = true;
+    p.offer = offer;
+    p.leveled = true;
   }
 }
 
-function makeOffer(g: Game): number[] {
+function makeOffer(g: Game, p: Player): number[] {
   const pool: number[] = [];
-  for (let p = 0; p < PERK_COUNT; p++) {
-    if (g.perks[p]! < g.tuning.perkMaxLevel) pool.push(p);
+  for (let k = 0; k < PERK_COUNT; k++) {
+    if (p.perks[k]! < g.tuning.perkMaxLevel) pool.push(k);
   }
   // Частичная перетасовка Фишера — Йетса генератором забега.
   const take = Math.min(OFFER_SIZE, pool.length);
@@ -95,15 +98,16 @@ function makeOffer(g: Game): number[] {
 }
 
 /** Применить выбор карточки index из текущего предложения. Возвращает false, если выбора нет. */
-export function applyChoice(g: Game, index: number): boolean {
-  const offer = g.offer;
+export function applyChoice(g: Game, p: Player, index: number): boolean {
+  const offer = p.offer;
   if (offer === null || index < 0 || index >= offer.length) return false;
   const perk = offer[index]!;
-  g.perks[perk]!++;
-  g.level++;
-  g.offer = null;
-  g.d = derive(g.tuning, g.perks);
-  if (g.hero.swingCd > g.d.swingTicks) g.hero.swingCd = g.d.swingTicks;
-  checkLevel(g); // если сена хватает и на следующий перк — сразу новое предложение
+  p.perks[perk]!++;
+  p.level++;
+  p.offer = null;
+  p.d = derive(g.tuning, p.perks);
+  if (p.swingCd > p.d.swingTicks) p.swingCd = p.d.swingTicks;
+  if (p.d.combo) p.toolCd = 0;
+  checkLevel(g, p); // если сена хватает и на следующее улучшение — сразу новое предложение
   return true;
 }

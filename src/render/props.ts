@@ -1,4 +1,4 @@
-// Неподвижные предметы: стог, камни и деревья вокруг поля.
+// Предметы на поле: стоги, тюки, камни и деревья вокруг.
 
 import * as THREE from 'three';
 import type { Rock } from '../sim/gen.ts';
@@ -15,27 +15,90 @@ function lcg(seed: number): () => number {
   };
 }
 
-export function buildStack(x: number, z: number): THREE.Group {
+/**
+ * Цвета игроков по номерам: красный, синий, жёлтый, фиолетовый. По ним узнаются косарь,
+ * флаг на стогу, счёт и стрелки. Цвет у игрока один и тот же на всех экранах.
+ */
+export const PLAYER_COLORS = [0xd8503f, 0x3f6fd8, 0xe0a020, 0x8a4fd0];
+
+/**
+ * Стог. Сено растёт вместе с тем, что в него привезли; на шесте — флажок хозяина
+ * (в игре на одного флажка нет).
+ */
+export class StackView {
+  readonly group = new THREE.Group();
+  private readonly body = new THREE.Group();
+  private readonly flag: THREE.Mesh | null = null;
+  private bounce = 0;
+
+  constructor(x: number, z: number, flagColor: number | null) {
+    const hay = lambert(0xdcb650);
+    const hayDark = lambert(0xc49a3c);
+
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.3, 1.0, 9), hayDark);
+    base.position.y = 0.5;
+    const dome = new THREE.Mesh(new THREE.ConeGeometry(1.2, 1.5, 9), hay);
+    dome.position.y = 1.72;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 3.2, 5), lambert(0x7a5a36));
+    pole.position.y = 1.6;
+    this.body.add(base, dome, pole);
+
+    const shadow = new THREE.Mesh(
+      new THREE.CircleGeometry(1.7, 20),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18, depthWrite: false }),
+    );
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.y = 0.02;
+    this.group.add(this.body, shadow);
+
+    if (flagColor !== null) {
+      const cloth = new THREE.BoxGeometry(0.78, 0.46, 0.05);
+      cloth.translate(0.41, -0.23, 0); // держится за шест левым краем, висит от верхушки вниз
+      this.flag = new THREE.Mesh(cloth, lambert(flagColor));
+      this.flag.rotation.y = Math.PI / 4; // полотнищем к камере: она смотрит с угла (+x, +z)
+      this.group.add(this.flag);
+    }
+    this.group.position.set(x, 0, z);
+    this.update(0, 0, 0);
+  }
+
+  /** Сено ушло в стог или его тащат оттуда — стог пружинит. */
+  poke(): void {
+    this.bounce = 1;
+  }
+
+  update(kg: number, time: number, dt: number): void {
+    const k = Math.min(1, kg / 220);
+    this.bounce *= Math.exp(-dt * 8);
+    const squash = 1 - 0.06 * this.bounce * Math.sin(time * 40);
+    const w = 0.85 + 0.3 * k;
+    const h = (0.75 + 0.85 * k) * squash;
+    this.body.scale.set(w, h, w);
+    if (this.flag) {
+      this.flag.position.y = 3.2 * h; // верхушка шеста
+      this.flag.rotation.z = Math.sin(time * 3.1) * 0.05;
+    }
+  }
+}
+
+/** Тюк сена единичного размера: брусок с двумя обвязками — чтобы читался как тюк, а не куча. */
+export function buildBale(hayColor: number): THREE.Group {
   const group = new THREE.Group();
-  const hay = lambert(0xdcb650);
-  const hayDark = lambert(0xc49a3c);
-
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.3, 1.0, 9), hayDark);
-  base.position.y = 0.5;
-  const dome = new THREE.Mesh(new THREE.ConeGeometry(1.2, 1.5, 9), hay);
-  dome.position.y = 1.72;
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 3.2, 5), lambert(0x7a5a36));
-  pole.position.y = 1.6;
-  const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(1.7, 20),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18, depthWrite: false }),
-  );
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.02;
-
-  group.add(base, dome, pole, shadow);
-  group.position.set(x, 0, z);
+  const hay = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.7, 0.8), lambert(hayColor));
+  hay.position.y = 0.35;
+  const twineGeo = new THREE.BoxGeometry(0.06, 0.73, 0.83);
+  const twine = lambert(0x8a5a1c);
+  const twineA = new THREE.Mesh(twineGeo, twine);
+  twineA.position.set(-0.28, 0.35, 0);
+  const twineB = new THREE.Mesh(twineGeo, twine);
+  twineB.position.set(0.28, 0.35, 0);
+  group.add(hay, twineA, twineB);
   return group;
+}
+
+/** Размер тюка по весу: объём растёт вместе с сеном. */
+export function baleScale(kg: number): number {
+  return Math.max(0.3, 0.36 * Math.cbrt(kg));
 }
 
 export function buildRocks(rocks: Rock[]): THREE.Group {

@@ -1,5 +1,6 @@
 // Проверка «два движка»: одна и та же симуляция в Node (V8, как на Android и в Chrome)
-// и в системном jsc (JavaScriptCore, как на iPhone). Хеши на 20 зёрнах обязаны совпасть.
+// и в системном jsc (JavaScriptCore, как на iPhone). Хеши на 20 зёрнах — в одиночку и
+// вдвоём — обязаны совпасть.
 // Запуск: npm run xengine
 
 import { execFileSync } from 'node:child_process';
@@ -21,7 +22,7 @@ const run = (cmd) =>
   execFileSync(cmd, ['xengine.js'], { encoding: 'utf8', cwd: distDir }).trim().split('\n');
 
 const v8 = run(process.execPath);
-console.log(`Node ${process.version} (V8): ${v8.length} зёрен`);
+console.log(`Node ${process.version} (V8): ${v8.length} забегов`);
 
 if (!existsSync(JSC)) {
   console.log('jsc не найден — сравнение с JavaScriptCore пропущено.');
@@ -31,14 +32,14 @@ if (!existsSync(JSC)) {
 
 const jsc = run(JSC);
 let mismatches = 0;
-console.log('зерно  V8        JSC       в стогу  перков');
+console.log('игроков  зерно  V8        JSC       в стогах  перков/ног');
 for (let i = 0; i < Math.max(v8.length, jsc.length); i++) {
   const a = (v8[i] ?? '').split(' ');
   const b = (jsc[i] ?? '').split(' ');
   const same = v8[i] === jsc[i];
   if (!same) mismatches++;
   console.log(
-    `${(a[0] ?? '?').padStart(5)}  ${a[1] ?? '?'}  ${b[1] ?? '?'}  ${(a[2] ?? '?').padStart(8)}  ${(a[3] ?? '?').padStart(7)}  ${same ? 'совпало' : 'РАСХОЖДЕНИЕ'}`,
+    `${(a[0] ?? '?').padStart(7)}  ${(a[1] ?? '?').padStart(5)}  ${a[2] ?? '?'}  ${b[2] ?? '?'}  ${(a[3] ?? '?').padStart(8)}  ${(a[4] ?? '?').padStart(10)}  ${same ? 'совпало' : 'РАСХОЖДЕНИЕ'}`,
   );
 }
 
@@ -46,4 +47,4 @@ if (mismatches > 0) {
   console.error(`\nРасхождений: ${mismatches}. Симуляция считает по-разному в V8 и JavaScriptCore.`);
   process.exit(1);
 }
-console.log('\nV8 и JavaScriptCore дали одинаковые хеши на всех зёрнах.');
+console.log('\nV8 и JavaScriptCore дали одинаковые хеши во всех забегах: и в одиночку, и вдвоём.');

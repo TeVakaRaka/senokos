@@ -77,18 +77,21 @@ export class Platform {
     }
   }
 
-  /** Короткая отдача в руку на взмахе. В Telegram работает и на iPhone. */
-  haptic(): void {
+  /**
+   * Отдача в руку: короткая на взмахе, сильная — когда подрезали ноги.
+   * В Telegram работает и на iPhone.
+   */
+  haptic(style: 'light' | 'heavy' = 'light'): void {
     const now = performance.now();
-    if (now - this.lastHaptic < 120) return;
+    if (style === 'light' && now - this.lastHaptic < 120) return;
     this.lastHaptic = now;
     const tg = this.app?.HapticFeedback;
     if (tg && this.app!.isVersionAtLeast('6.1')) {
-      tg.impactOccurred('light');
+      tg.impactOccurred(style);
       return;
     }
     // Обычный сайт: вибрация есть только на Android и только после первого касания.
-    if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(10);
+    if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(style === 'heavy' ? 60 : 10);
   }
 
   /** Спрашивать ли подтверждение при закрытии (во время забега — да). */

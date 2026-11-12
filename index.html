@@ -18,24 +18,66 @@
     <div id="stick-knob"></div>
 
     <div id="carry" aria-hidden="true"><div id="carry-fill"></div></div>
-    <div id="stack-arrow" aria-hidden="true">➜</div>
+    <div id="stack-arrow" class="edge-arrow" aria-hidden="true">➜</div>
+    <div id="flash" aria-hidden="true"></div>
 
     <div id="hud">
       <div class="pill" id="hud-stack">
-        <span class="hud-stack-line">🌾 <b id="hud-stack-kg">0</b> <small>кг в стогу</small></span>
+        <span class="hud-stack-line">
+          <span class="hay-mark">🌾</span><i class="dot me" id="hud-me-dot"></i>
+          <b id="hud-stack-kg">0</b> <small id="hud-stack-label">кг в стогу</small>
+        </span>
         <span class="xp" aria-hidden="true"><span id="hud-xp-fill"></span></span>
       </div>
       <div class="pill" id="hud-time">3:00</div>
+      <div class="pill" id="hud-foe" hidden></div>
     </div>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <div id="countdown" aria-live="polite" hidden></div>
     <div id="debug-line"></div>
+
+    <button id="tool" type="button" aria-label="Сменить инструмент: коса или грабли" hidden>
+      <span class="tool-cell" data-tool="0">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 22 16.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <path d="M17 3C10.5 1.5 4.5 4.5 2 10.5c4-3.2 9-4.6 14-4z" fill="currentColor" />
+        </svg>
+        <small>Коса</small>
+      </span>
+      <span class="tool-cell" data-tool="1">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M12 2v13M4 15h16M4.5 15v5.5M8.25 15v5.5M12 15v5.5M15.75 15v5.5M19.5 15v5.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          />
+        </svg>
+        <small>Грабли</small>
+      </span>
+    </button>
 
     <div id="overlay">
       <h1>Сенокос</h1>
       <p id="overlay-text">
-        Веди пальцем — косарь косит сам. Скошенная трава сохнет и золотеет: пройди по ней —
-        грабли сгребут сено в тюк. Отвези тюк к стогу до конца дня.
+        Веди пальцем — косарь косит сам. Скошенное сохнет и золотеет. Кнопкой справа внизу
+        возьми грабли, сгреби сухое сено в тюк и отвези к своему стогу.
       </p>
-      <button id="overlay-button" type="button">Играть</button>
+      <div id="mode-row">
+        <button id="play-solo" class="play" type="button">Играть одному</button>
+        <button id="play-pvp" class="play" type="button">
+          Против бота
+          <small>косой подрежь ему ноги, граблями тащи сено из его стога</small>
+        </button>
+        <button id="play-net" class="play" type="button" hidden>
+          С друзьями
+          <small>до четырёх игроков по сети: друзья открывают этот же адрес</small>
+        </button>
+      </div>
+      <button id="overlay-start" class="play primary" type="button" hidden>Начать игру</button>
+      <button id="overlay-share" class="play" type="button" hidden>Позвать друзей</button>
+      <button id="overlay-action" class="play" type="button" hidden>Обновить</button>
       <div id="look-row" role="group" aria-label="Вид травы"></div>
     </div>
 

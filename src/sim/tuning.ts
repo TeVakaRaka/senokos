@@ -48,6 +48,19 @@ export interface Tuning {
   unloadRate: number; // кг в секунду при выгрузке
   yesterdayKg: number; // «вчерашний» сухой покос у стога с утра, кг
 
+  // Инструменты
+  swapTime: number; // секунд занимает смена косы на грабли и обратно
+  scytheSpeed: number; // множитель скорости с косой в руках: с граблями косарь быстрее
+
+  // PvP
+  crawlTime: number; // секунд ползёт тот, кому подрезали ноги
+  crawlFactor: number; // множитель скорости ползком
+  shieldTime: number; // секунд неуязвимости после того, как встал
+  stealRate: number; // кг в секунду из чужого стога
+  dropRadius: number; // упавший тюк подбирается ближе этого расстояния, м
+  hitHay: number; // сколько сена удар выбивает из тюка того, кто с граблями, кг
+  armorMin: number; // если в тюке меньше — он не спасает, удар приходится по ногам, кг
+
   // Перки
   perkMaxLevel: number;
   arcPerLevel: number; // градусов дуги за уровень
@@ -88,10 +101,21 @@ export const DEFAULT_TUNING: Tuning = {
   dryTime: 18,
   rakeRadius: 1.0,
   carryCap: 16,
-  carrySlow: 0.35,
+  carrySlow: 0.16,
   stackReach: 3.0,
   unloadRate: 40,
   yesterdayKg: 12,
+
+  swapTime: 0.4,
+  scytheSpeed: 0.9,
+
+  crawlTime: 4,
+  crawlFactor: 0.35,
+  shieldTime: 3,
+  stealRate: 5,
+  dropRadius: 1.2,
+  hitHay: 8,
+  armorMin: 1,
 
   perkMaxLevel: 5,
   arcPerLevel: 25,
@@ -137,6 +161,15 @@ export function tuningValues(t: Tuning): number[] {
     t.stackReach,
     t.unloadRate,
     t.yesterdayKg,
+    t.swapTime,
+    t.crawlTime,
+    t.crawlFactor,
+    t.shieldTime,
+    t.stealRate,
+    t.dropRadius,
+    t.scytheSpeed,
+    t.hitHay,
+    t.armorMin,
     t.perkMaxLevel,
     t.arcPerLevel,
     t.reachPerLevel,

@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import type { Field } from '../sim/field.ts';
 import { DT } from '../sim/tuning.ts';
+import { BLOOD_COLOR } from './ground.ts';
 import type { Look } from './look.ts';
 
 const CHUNKS = 6;
@@ -25,7 +26,10 @@ uniform float uTime;      // часы картинки, с
 uniform float uGameTime;  // игровое время, с (стоит, пока игрок выбирает перк)
 uniform float uDryTime;   // сколько сохнет скошенное, с
 uniform vec2 uHero;
+uniform vec2 uHero2;    // второй косарь (в игре на одного — далеко за полем)
 uniform vec2 uWind;
+uniform sampler2D uMask;  // маска земли: в синем канале — кровь
+uniform float uSize;      // размер поля, м
 
 varying float vH;
 varying float vTint;
@@ -33,6 +37,7 @@ varying float vLaid;
 varying float vRaked;
 varying float vDry;
 varying float vPulse;
+varying float vBlood;
 
 void main() {
   float isCut = step(-0.5, iState.x);
@@ -52,9 +57,12 @@ void main() {
   vec2 away = iOffset - uHero;
   float dist = length(away);
   float push = (1.0 - smoothstep(0.25, 1.15, dist)) * 0.32 * bend;
+  vec2 away2 = iOffset - uHero2;
+  float dist2 = length(away2);
+  float push2 = (1.0 - smoothstep(0.25, 1.15, dist2)) * 0.32 * bend;
   vec3 stand = vec3(rxz.x, q.y, rxz.y);
-  stand.xz += uWind * sway * bend + (away / max(dist, 0.001)) * push;
-  stand.y -= push * 0.35;
+  stand.xz += uWind * sway * bend + (away / max(dist, 0.001)) * push + (away2 / max(dist2, 0.001)) * push2;
+  stand.y -= (push + push2) * 0.35;
 
   // Лежит: травинки легли в одну сторону. У каждого кустика своя высота над землёй,
   // иначе плоские травинки мерцают друг сквозь друга.
@@ -80,6 +88,7 @@ void main() {
   vRaked = rakeT;
   vDry = dry;
   vPulse = sin(uTime * 2.6 + phase * 1.3);
+  vBlood = texture2D(uMask, iOffset / uSize).b;
 }
 `;
 
@@ -91,6 +100,7 @@ uniform vec3 uStubble;
 uniform vec3 uHayWet;
 uniform vec3 uHayDrying;
 uniform vec3 uHayReady;
+uniform vec3 uBlood;
 
 varying float vH;
 varying float vTint;
@@ -98,6 +108,7 @@ varying float vLaid;
 varying float vRaked;
 varying float vDry;
 varying float vPulse;
+varying float vBlood;
 
 void main() {
   vec3 standing = mix(uBase, mix(uTipA, uTipB, vTint), vH);
@@ -110,6 +121,8 @@ void main() {
 
   vec3 col = mix(standing, hay, vLaid);
   col = mix(col, uStubble, vRaked);
+  // Кровь: гуще у земли, кончики травинок остаются своего цвета.
+  col = mix(col, uBlood, smoothstep(0.08, 0.55, vBlood) * (0.85 - 0.35 * vH));
   gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
 }
@@ -179,7 +192,7 @@ export class Grass {
   private readonly tuftChunk: Uint16Array;
   private readonly tuftSlot: Uint16Array;
 
-  constructor(field: Field, look: Look, bladesPerTuft: number, dryTime: number) {
+  constructor(field: Field, look: Look, bladesPerTuft: number, dryTime: number, mask: THREE.Texture) {
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
@@ -189,6 +202,10 @@ export class Grass {
         uGameTime: { value: 0 },
         uDryTime: { value: dryTime },
         uHero: { value: new THREE.Vector2() },
+        uHero2: { value: new THREE.Vector2(-1000, -1000) },
+        uMask: { value: mask },
+        uSize: { value: field.size },
+        uBlood: { value: new THREE.Color(BLOOD_COLOR) },
         uWind: { value: new THREE.Vector2(0.8, 0.6) },
         uBase: { value: new THREE.Color(look.grassBase) },
         uTipA: { value: new THREE.Color(look.grassTipA) },
@@ -304,6 +321,11 @@ export class Grass {
     u.uTime!.value = time;
     u.uGameTime!.value = gameTime;
     (u.uHero!.value as THREE.Vector2).set(heroX, heroZ);
+  }
+
+  /** Где стоит второй косарь — трава раздвигается и вокруг него. */
+  setSecondHero(x: number, z: number): void {
+    (this.material.uniforms.uHero2!.value as THREE.Vector2).set(x, z);
   }
 
   dispose(): void {

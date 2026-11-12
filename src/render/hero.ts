@@ -1,6 +1,9 @@
-// Герой из простых фигур и след взмаха косы. Анимация процедурная: шаг, покачивание, взмах.
+// Косарь из простых фигур и след взмаха косы. Анимация процедурная: шаг, покачивание,
+// взмах, смена инструмента, ползком с подрезанными ногами.
 
 import * as THREE from 'three';
+import { TOOL_RAKE } from '../sim/game.ts';
+import { baleScale, buildBale } from './props.ts';
 
 const SWING_TIME = 0.2; // секунд длится взмах на экране
 const SWOOSH_TIME = 0.32; // секунд виден белый след
@@ -9,20 +12,34 @@ function lambert(color: number): THREE.MeshLambertMaterial {
   return new THREE.MeshLambertMaterial({ color, flatShading: true });
 }
 
+/** Что сейчас с косарём — из состояния симуляции. */
+export interface HeroPose {
+  load: number; // кг в тюке
+  rakeRadius: number; // ширина граблей, м
+  tool: number; // что в руках
+  combo: boolean; // «синтез»: работают и коса, и грабли
+  crawling: boolean; // ноги подрезаны
+  shielded: boolean; // только что встал и пока неуязвим
+}
+
 export class HeroView {
   readonly group = new THREE.Group();
   readonly swoosh: THREE.Mesh;
+  /** Отрезанные ноги: лежат там, где подрезали, пока косарь ползёт. Живут в сцене, не в группе. */
+  readonly lostLegs = new THREE.Group();
 
   private readonly body = new THREE.Group();
   private readonly legL: THREE.Mesh;
   private readonly legR: THREE.Mesh;
   private readonly scythe = new THREE.Group();
+  private readonly rake = new THREE.Group();
   private readonly rakeHead = new THREE.Group();
-  private readonly bale = new THREE.Group();
+  private readonly rope: THREE.Mesh;
+  private readonly bale: THREE.Group;
   private readonly swooshMaterial: THREE.ShaderMaterial;
-  private load = 0; // кг в тюке
-  private full = false;
+  private rakeMix = 0; // 0 — грабли убраны, 1 — в работе (плавно)
   private shoulder = 0; // 0 — коса в руках, 1 — на плече (плавно)
+  private crawlMix = 0; // 0 — на ногах, 1 — ползёт (плавно)
 
   private facing = 0; // текущий угол модели, радианы (в координатах симуляции)
   private firstFrame = true;
@@ -31,7 +48,8 @@ export class HeroView {
   private swingHalfArc = 0.96; // половина дуги последнего взмаха, радианы
   private swooshKey = '';
 
-  constructor(hayColor: number) {
+  /** color — цвет рубахи и ленты на шляпе: по нему игроки отличают своего от чужого. */
+  constructor(color: number, hayColor: number) {
     // Ноги
     const legGeo = new THREE.BoxGeometry(0.16, 0.5, 0.16);
     legGeo.translate(0, -0.25, 0);
@@ -42,23 +60,26 @@ export class HeroView {
     this.legR.position.set(0, 0.5, 0.11);
     this.group.add(this.legL, this.legR);
 
-    // Туловище, голова, шляпа
-    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.25, 0.62, 7), lambert(0xd8503f));
+    // Туловище, голова, шляпа с лентой
+    const shirt = lambert(color);
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.25, 0.62, 7), shirt);
     torso.position.y = 0.81;
     const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.17, 1), lambert(0xe3b58f));
     head.position.y = 1.28;
     const straw = lambert(0xe9cf6b);
     const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.42, 0.04, 10), straw);
     brim.position.y = 1.4;
-    const crown = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.2, 10), straw);
-    crown.position.y = 1.51;
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.235, 0.25, 0.08, 10), shirt);
+    band.position.y = 1.46;
+    const crown = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.2, 10), straw);
+    crown.position.y = 1.59;
     const armGeo = new THREE.BoxGeometry(0.42, 0.11, 0.11);
-    const armL = new THREE.Mesh(armGeo, lambert(0xd8503f));
+    const armL = new THREE.Mesh(armGeo, shirt);
     armL.position.set(0.2, 0.92, -0.2);
     armL.rotation.z = -0.5;
     const armR = armL.clone();
     armR.position.z = 0.2;
-    this.body.add(torso, head, brim, crown, armL, armR);
+    this.body.add(torso, head, brim, band, crown, armL, armR);
 
     // Коса: косовище от рук к земле перед героем и лезвие поперёк. Модель смотрит вдоль +x.
     const snathLength = 1.45;
@@ -95,20 +116,18 @@ export class HeroView {
     const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.9, 5), wood);
     handle.position.set(-0.47, 0.53, 0);
     handle.rotation.z = -0.75;
-    this.group.add(this.rakeHead, handle);
+    this.rake.add(this.rakeHead, handle);
+    this.rake.visible = false;
+    this.group.add(this.rake);
 
-    // Тюк: растёт вместе с сеном в нём. Две обвязки — чтобы читался как тюк, а не куча.
-    const hay = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.7, 0.8), lambert(hayColor));
-    hay.position.y = 0.35;
-    const twineGeo = new THREE.BoxGeometry(0.06, 0.73, 0.83);
-    const twine = lambert(0x8a5a1c);
-    const twineA = new THREE.Mesh(twineGeo, twine);
-    twineA.position.set(-0.28, 0.35, 0);
-    const twineB = new THREE.Mesh(twineGeo, twine);
-    twineB.position.set(0.28, 0.35, 0);
-    this.bale.add(hay, twineA, twineB);
+    // Тюк: растёт вместе с сеном в нём. С косой в руках косарь тянет его на верёвке.
+    this.bale = buildBale(hayColor);
     this.bale.visible = false;
     this.group.add(this.bale);
+    const ropeGeo = new THREE.CylinderGeometry(0.018, 0.018, 1, 4);
+    this.rope = new THREE.Mesh(ropeGeo, lambert(0x8a5a1c));
+    this.rope.visible = false;
+    this.group.add(this.rope);
 
     // Тень-пятно под героем
     const shadow = new THREE.Mesh(
@@ -118,6 +137,20 @@ export class HeroView {
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.y = 0.02;
     this.group.add(shadow);
+
+    // Отрезанные ноги: две штанины на земле и красные срезы.
+    const cut = lambert(0xb01a16);
+    for (const side of [-1, 1]) {
+      const leg = new THREE.Mesh(legGeo, pants);
+      leg.rotation.z = Math.PI / 2; // лежит на боку
+      leg.rotation.y = side * 0.5;
+      leg.position.set(side * 0.08, 0.09, side * 0.2);
+      const stub = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.03, 0.17), cut);
+      stub.position.y = 0.005;
+      leg.add(stub);
+      this.lostLegs.add(leg);
+    }
+    this.lostLegs.visible = false;
 
     // След взмаха: сектор-кольцо, по которому пробегает светлая полоса.
     this.swooshMaterial = new THREE.ShaderMaterial({
@@ -173,29 +206,37 @@ export class HeroView {
     this.swoosh.visible = true;
   }
 
-  /** Сколько сена в тюке (кг) и полон ли он. */
-  setLoad(kg: number, full: boolean): void {
-    this.load = kg;
-    this.full = full;
+  /** Подрезали ноги: они остаются лежать на этом месте. */
+  dropLegs(x: number, z: number): void {
+    this.lostLegs.position.set(x, 0, z);
+    this.lostLegs.rotation.y = Math.random() * Math.PI * 2;
+    this.lostLegs.visible = true;
   }
 
-  /** Ширина граблей (радиус сгребания в игре, м). */
-  setRakeRadius(radius: number): void {
-    this.rakeHead.scale.z = radius * 1.9;
-  }
-
-  update(x: number, z: number, dirAngle: number, speed: number, dt: number): void {
+  /** Кадр. time — часы картинки (для мигания). */
+  update(x: number, z: number, dirAngle: number, speed: number, pose: HeroPose, dt: number, time: number): void {
     this.group.position.set(x, 0, z);
 
     // Плавный поворот к направлению движения по кратчайшей дуге (в первом кадре — сразу).
     if (this.firstFrame) {
       this.firstFrame = false;
       this.facing = dirAngle;
+      this.rakeMix = pose.combo || pose.tool === TOOL_RAKE ? 1 : 0;
+      this.shoulder = pose.combo || pose.tool !== TOOL_RAKE ? 0 : 1;
     }
     let diff = dirAngle - this.facing;
     diff = Math.atan2(Math.sin(diff), Math.cos(diff));
     this.facing += diff * (1 - Math.exp(-dt * 16));
     this.group.rotation.y = -this.facing;
+
+    // Что в руках: коса спереди или на плече, грабли в работе или убраны.
+    const rakeOn = pose.combo || pose.tool === TOOL_RAKE;
+    const scytheOn = pose.combo || pose.tool !== TOOL_RAKE;
+    const ease = 1 - Math.exp(-dt * 11);
+    this.rakeMix += ((rakeOn ? 1 : 0) - this.rakeMix) * ease;
+    this.shoulder += ((scytheOn ? 0 : 1) - this.shoulder) * ease;
+    this.crawlMix += ((pose.crawling ? 1 : 0) - this.crawlMix) * (1 - Math.exp(-dt * 13));
+    const crawl = this.crawlMix;
 
     // Шаг
     const moving = speed > 0.05;
@@ -203,7 +244,10 @@ export class HeroView {
     const stride = moving ? Math.sin(this.walk) * Math.min(0.75, 0.25 + speed * 0.12) : 0;
     this.legL.rotation.z = stride;
     this.legR.rotation.z = -stride;
-    this.body.position.y = moving ? Math.abs(Math.sin(this.walk)) * 0.04 : 0;
+    // Ноги: ползком их нет (лежат отдельно), потом «отрастают» обратно.
+    const legs = Math.max(0.001, 1 - crawl);
+    this.legL.scale.setScalar(legs);
+    this.legR.scale.setScalar(legs);
 
     // Взмах: коса проходит дугу справа налево, туловище подаётся следом.
     this.swingAge += dt;
@@ -216,10 +260,9 @@ export class HeroView {
     // В координатах three поворот вокруг Y идёт в обратную сторону относительно угла симуляции.
     this.scythe.rotation.y = -angle;
     this.body.rotation.y = -angle * 0.25;
-    this.body.rotation.z = this.swingAge < SWING_TIME ? -0.12 * Math.sin(t * Math.PI) : 0;
+    const lean = this.swingAge < SWING_TIME ? -0.12 * Math.sin(t * Math.PI) : 0;
 
-    // С полной охапкой коса уходит на плечо.
-    this.shoulder += ((this.full ? 1 : 0) - this.shoulder) * (1 - Math.exp(-dt * 10));
+    // С граблями в руках коса уходит на плечо.
     if (this.shoulder > 0.01) {
       this.scythe.rotation.y = this.scythe.rotation.y * (1 - this.shoulder) + 1.3 * this.shoulder;
       this.scythe.rotation.z = 0.9 * this.shoulder;
@@ -228,15 +271,50 @@ export class HeroView {
       this.scythe.rotation.z = 0;
     }
 
-    // Тюк за граблями: появляется с первым сеном, объём растёт вместе с весом.
-    this.bale.visible = this.load > 0.05;
+    // Ползком: туловище лежит на земле лицом вперёд и подтягивается руками.
+    const pull = crawl > 0.5 && moving ? Math.sin(this.walk * 1.5) * 0.06 : 0;
+    this.body.rotation.z = lean * (1 - crawl) - 1.32 * crawl;
+    this.body.position.set(
+      -0.42 * crawl + pull,
+      (moving ? Math.abs(Math.sin(this.walk)) * 0.04 : 0) * (1 - crawl) + 0.1 * crawl,
+      0,
+    );
+    this.scythe.visible = crawl < 0.5;
+
+    // Грабли: появляются из-за спины, когда их берут в руки.
+    this.rake.visible = this.rakeMix > 0.03 && crawl < 0.5;
+    if (this.rake.visible) {
+      this.rake.scale.setScalar(0.25 + 0.75 * this.rakeMix);
+      this.rakeHead.scale.z = pose.rakeRadius * 1.9;
+    }
+
+    // Тюк за спиной: появляется с первым сеном, объём растёт вместе с весом.
+    this.bale.visible = pose.load > 0.05 && crawl < 0.5;
+    this.rope.visible = false;
     if (this.bale.visible) {
-      const s = Math.max(0.3, 0.36 * Math.cbrt(this.load));
+      const s = baleScale(pose.load);
       this.bale.scale.setScalar(s);
       this.bale.position.x = -0.95 - 0.58 * s;
-      // Полный тюк слегка подпрыгивает на ходу.
+      // Тюк слегка подпрыгивает на ходу.
       this.bale.position.y = moving ? Math.abs(Math.sin(this.walk * 0.5)) * 0.03 : 0;
+      // Без граблей тюк едет на верёвке от пояса.
+      if (this.rakeMix < 0.5) {
+        const ax = -0.18;
+        const ay = 0.72;
+        const bx = this.bale.position.x + 0.5 * s;
+        const by = 0.38 * s;
+        const dx = bx - ax;
+        const dy = by - ay;
+        this.rope.visible = true;
+        this.rope.position.set((ax + bx) / 2, (ay + by) / 2, 0);
+        this.rope.scale.y = Math.hypot(dx, dy);
+        this.rope.rotation.z = Math.atan2(-dx, dy);
+      }
     }
+
+    // Только что встал: мигает, пока его нельзя подрезать снова.
+    this.group.visible = !(pose.shielded && !pose.crawling && Math.floor(time * 11) % 2 === 0);
+    if (!pose.crawling && this.lostLegs.visible) this.lostLegs.visible = false;
 
     // След
     const prog = this.swingAge / SWOOSH_TIME;

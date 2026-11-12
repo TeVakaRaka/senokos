@@ -4,5 +4,6 @@ dist-sim/
 .DS_Store
 *.log
 public/selftest.json
+public/net.json
 .env
 .env.*

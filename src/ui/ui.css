@@ -73,6 +73,10 @@ body {
 }
 
 /* Верхняя плашка */
+#hud[hidden] {
+  display: none;
+}
+
 #hud {
   position: fixed;
   top: calc(var(--safe-top) + 10px);
@@ -149,23 +153,72 @@ body {
   text-wrap: pretty;
 }
 
-#overlay-button {
+#mode-row {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(100%, 300px);
+}
+
+#mode-row[hidden] {
+  display: none;
+}
+
+.play {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
   min-width: 200px;
-  padding: 16px 28px;
+  padding: 16px 22px;
   border: 0;
   border-radius: 16px;
-  background: var(--straw);
+  background: var(--paper);
   color: var(--ink);
   font: inherit;
   font-size: 20px;
   font-weight: 700;
-  box-shadow: 0 6px 0 #b8982f;
+  box-shadow: 0 6px 0 #c9b98a;
   touch-action: manipulation;
 }
 
-#overlay-button:active {
+.play small {
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.25;
+  opacity: 0.7;
+  text-wrap: balance;
+}
+
+/* Режим, в который играли в прошлый раз, — главный. */
+.play.primary {
+  background: var(--straw);
+  box-shadow: 0 6px 0 #b8982f;
+}
+
+.play:active {
   transform: translateY(4px);
+  box-shadow: 0 2px 0 #c9b98a;
+}
+
+.play.primary:active {
   box-shadow: 0 2px 0 #b8982f;
+}
+
+.play[hidden] {
+  display: none;
+}
+
+#overlay-action,
+#overlay-start,
+#overlay-share {
+  width: auto;
+}
+
+/* Пока начинать не с кем */
+#overlay-start:disabled {
+  opacity: 0.55;
 }
 
 /* Выбор вида травы на заставке (временно, пока вид не выбран) */
@@ -175,6 +228,10 @@ body {
   justify-content: center;
   gap: 8px;
   margin-top: 6px;
+}
+
+#look-row[hidden] {
+  display: none;
 }
 
 .chip {
@@ -301,8 +358,8 @@ body {
   }
 }
 
-/* Стрелка к стогу у края экрана */
-#stack-arrow {
+/* Стрелки у края экрана: к своему стогу и к сопернику */
+.edge-arrow {
   position: fixed;
   left: 0;
   top: 0;
@@ -320,6 +377,284 @@ body {
   opacity: 0;
   transition: opacity 0.2s;
   will-change: transform;
+}
+
+/* Свой стог грабят */
+#stack-arrow.alarm {
+  background: #d8362a;
+  color: #fff;
+  animation: carry-pulse 0.35s ease-in-out infinite alternate;
+}
+
+.edge-arrow.foe {
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
+  color: #fff;
+  font-size: 16px;
+  line-height: 30px;
+}
+
+/* Цвета игроков в плашках */
+.dot {
+  display: none;
+  width: 11px;
+  height: 11px;
+  margin-right: 2px;
+  border-radius: 50%;
+  vertical-align: baseline;
+}
+
+.dot.me {
+  background: #d8503f;
+}
+
+#hud.duel .dot,
+#hud-foe .dot {
+  display: inline-block;
+}
+
+/* Счёт соперников: по точке и числу на каждого */
+.foe-item + .foe-item {
+  margin-left: 9px;
+}
+
+#hud-foe.many {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+#hud-foe.many b {
+  font-size: 15px;
+}
+
+.hay-mark {
+  margin-right: 3px;
+}
+
+#hud.duel .hay-mark {
+  display: none;
+}
+
+#hud.duel .xp {
+  min-width: 84px;
+}
+
+#hud-foe[hidden] {
+  display: none;
+}
+
+#hud-foe b {
+  font-size: 17px;
+}
+
+/* Отсчёт перед игрой по сети */
+#countdown {
+  position: fixed;
+  left: 50%;
+  top: 34%;
+  transform: translate(-50%, -50%);
+  color: var(--paper);
+  font-size: 120px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-shadow: 0 4px 0 rgba(31, 42, 18, 0.55), 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+#countdown[hidden] {
+  display: none;
+}
+
+#countdown small {
+  display: block;
+  margin-top: 10px;
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+}
+
+#countdown small i {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  border-radius: 50%;
+  border: 2px solid var(--paper);
+  vertical-align: -1px;
+}
+
+#countdown b {
+  display: block;
+  text-align: center;
+}
+
+/* Адрес для друга на экране ожидания */
+#overlay p b {
+  display: inline-block;
+  margin: 6px 0;
+  font-size: 19px;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Короткое сообщение под верхней плашкой */
+#toast {
+  position: fixed;
+  left: 50%;
+  top: calc(var(--safe-top) + 66px);
+  max-width: calc(100% - 32px);
+  padding: 8px 14px;
+  border-radius: 14px;
+  background: rgba(20, 28, 12, 0.84);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: center;
+  text-wrap: balance;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transform: translate(-50%, -8px);
+  transition: opacity 0.18s, transform 0.18s;
+  pointer-events: none;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+#toast.bad {
+  background: rgba(156, 21, 18, 0.94);
+}
+
+#toast.good {
+  background: rgba(233, 207, 107, 0.97);
+  color: var(--ink);
+}
+
+/* Красная вспышка по краям, когда подрезали ноги */
+#flash {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, rgba(176, 20, 16, 0) 35%, rgba(176, 20, 16, 0.8) 100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+#flash.go {
+  animation: flash 0.7s ease-out;
+}
+
+@keyframes flash {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Полоска над героем, пока он ползёт: сколько осталось */
+#carry.crawl #carry-fill {
+  background: #e23a2e;
+}
+
+/* Кнопка инструмента: коса или грабли. В руках — подсвеченный. */
+#tool {
+  position: fixed;
+  right: calc(var(--safe-right) + 14px);
+  bottom: calc(var(--safe-bottom) + 44px);
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  border: 0;
+  border-radius: 24px;
+  background: rgba(20, 28, 12, 0.6);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3);
+  color: var(--paper);
+  font: inherit;
+  touch-action: manipulation;
+  transition: opacity 0.2s;
+}
+
+#tool[hidden] {
+  display: none;
+}
+
+.tool-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 64px;
+  height: 64px;
+  border-radius: 19px;
+  opacity: 0.62;
+  transition: background 0.12s, color 0.12s, opacity 0.12s, transform 0.12s;
+}
+
+.tool-cell svg {
+  width: 30px;
+  height: 30px;
+}
+
+.tool-cell small {
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+#tool[data-tool='0'] .tool-cell[data-tool='0'],
+#tool[data-tool='1'] .tool-cell[data-tool='1'],
+#tool.combo .tool-cell {
+  background: var(--straw);
+  color: var(--ink);
+  opacity: 1;
+  box-shadow: 0 3px 0 #b8982f;
+}
+
+/* Пока инструмент меняется, он ещё не работает */
+#tool.busy[data-tool='0'] .tool-cell[data-tool='0'],
+#tool.busy[data-tool='1'] .tool-cell[data-tool='1'] {
+  animation: tool-take 0.4s ease-out;
+}
+
+@keyframes tool-take {
+  from {
+    transform: scale(0.8);
+    filter: brightness(1.5);
+  }
+}
+
+/* Подсказка: сейчас пригодился бы другой инструмент */
+#tool.hint-0 .tool-cell[data-tool='0'],
+#tool.hint-1 .tool-cell[data-tool='1'] {
+  opacity: 1;
+  animation: tool-hint 0.55s ease-in-out infinite alternate;
+}
+
+@keyframes tool-hint {
+  from {
+    background: rgba(233, 207, 107, 0);
+  }
+  to {
+    background: rgba(233, 207, 107, 0.5);
+  }
+}
+
+/* Ползком инструменты не работают */
+#tool.down {
+  opacity: 0.45;
+}
+
+/* Синтез: менять больше нечего */
+#tool.combo {
+  pointer-events: none;
 }
 
 /* Карточки перков */
@@ -443,7 +778,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px 18px;
+  overflow-y: auto;
+  touch-action: pan-y;
+  padding: calc(var(--safe-top) + 12px) 18px calc(var(--safe-bottom) + 12px);
   background: rgba(32, 52, 22, 0.62);
 }
 
@@ -528,4 +865,95 @@ body {
 #results-again:active {
   transform: translateY(3px);
   box-shadow: 0 2px 0 #b8982f;
+}
+
+/* Итоги PvP */
+.results-card.win .results-kicker {
+  color: #2f7a2f;
+  opacity: 1;
+}
+
+.results-card.lose .results-kicker {
+  color: #b3261e;
+  opacity: 1;
+}
+
+.results-title {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.results-duel {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px !important;
+}
+
+.results-duel {
+  flex-wrap: wrap;
+}
+
+.results-duel span {
+  flex: 1 1 40%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 6px;
+  border-radius: 14px;
+  background: rgba(31, 42, 18, 0.06);
+  font-size: 14px;
+}
+
+.results-duel b {
+  font-size: 34px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Итоги с соперниками: показатели в две колонки, чтобы карточка влезала в экран */
+.results-card dl.compact {
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 12px 0 14px;
+}
+
+.results-card dl.compact div {
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  font-size: 14px;
+}
+
+.results-card dl.compact div.wide {
+  grid-column: 1 / -1;
+  flex-direction: row;
+}
+
+.results-card dl.compact dd {
+  font-size: 16px;
+}
+
+#results-menu {
+  margin-top: 12px;
+  padding: 8px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  opacity: 0.65;
+  text-decoration: underline;
+  touch-action: manipulation;
+}
+
+/* Подсказка про синтез на карточке улучшения */
+.perk-body em {
+  font-style: normal;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #8a6410;
 }

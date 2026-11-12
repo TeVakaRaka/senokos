@@ -1,4 +1,4 @@
-// Летящие клочки: трава от взмаха, сено из-под граблей в тюк и из тюка в стог.
+// Летящие клочки: трава от взмаха, сено из-под граблей в тюк и из тюка в стог, брызги крови.
 // Чисто для глаз: на счёт не влияют.
 
 import * as THREE from 'three';
@@ -86,6 +86,30 @@ export class CutBits {
           age: 0,
           life,
           gravity,
+        },
+        this.color,
+      );
+    }
+  }
+
+  /** Брызги во все стороны из одной точки (кровь, когда подрезали ноги). */
+  burst(x: number, y: number, z: number, amount: number, color: number): void {
+    this.color.setHex(color);
+    for (let i = 0; i < amount; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const out = 1 + Math.random() * 3.2;
+      this.push(
+        {
+          x,
+          y,
+          z,
+          vx: Math.cos(a) * out,
+          vy: 2.4 + Math.random() * 3.2,
+          vz: Math.sin(a) * out,
+          spin: (Math.random() - 0.5) * 20,
+          age: 0,
+          life: 0.5 + Math.random() * 0.45,
+          gravity: 12,
         },
         this.color,
       );
