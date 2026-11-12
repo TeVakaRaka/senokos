@@ -15,6 +15,8 @@ export interface RoomState {
   you: number; // свой номер в очереди (с нуля)
   host: boolean; // первый в комнате — он начинает игру
   lan: string; // адрес, который надо открыть друзьям
+  id: number; // свой номер подключения (0 — сервер старый и номеров не раздаёт)
+  ids: number[]; // номера подключений всех в комнате — для прямой связи между игроками
 }
 
 export interface NetEvents {
@@ -22,9 +24,12 @@ export interface NetEvents {
   room?: (state: RoomState) => void;
   /**
    * Игра началась. seed — зерно поля, you — номер своего игрока, players — сколько всего,
-   * delay — на сколько шагов вперёд отправлять ввод (одно число на всех).
+   * delay — на сколько шагов вперёд отправлять ввод (одно число на всех),
+   * direct — все ли соединены друг с другом напрямую.
    */
-  start?: (seed: number, you: number, players: number, delay: number) => void;
+  start?: (seed: number, you: number, players: number, delay: number, direct: boolean) => void;
+  /** «Визитка» для прямой связи от игрока с номером подключения from. */
+  signal?: (from: number, data: unknown) => void;
   /** Замер связи с сервером: время туда и обратно, мс. */
   ping?: (ms: number) => void;
   /** Ввод игрока from на шаг step. */
@@ -113,14 +118,18 @@ export class NetLink {
         you: num(msg.you),
         host: msg.host === true,
         lan: typeof msg.lan === 'string' ? msg.lan : '',
+        id: num(msg.id),
+        ids: Array.isArray(msg.ids) ? msg.ids.filter((v): v is number => typeof v === 'number') : [],
       });
+    } else if (msg.t === 'sig') {
+      this.events.signal?.(num(msg.from), msg.data);
     } else if (msg.t === 'pong') {
       this.onPong(num(msg.n));
     } else if (msg.t === 'start') {
       if (typeof msg.seed !== 'number' || typeof msg.you !== 'number' || typeof msg.players !== 'number') return;
       this.me = msg.you;
       this.stopPing();
-      this.events.start?.(msg.seed, msg.you, msg.players, num(msg.delay));
+      this.events.start?.(msg.seed, msg.you, msg.players, num(msg.delay), msg.direct === true);
     } else if (msg.t === 'left') {
       this.events.gone?.(num(msg.who));
     } else if (msg.t === 'full' || msg.t === 'mismatch') {
@@ -136,6 +145,16 @@ export class NetLink {
   /** Первый в комнате говорит: все в сборе, начинаем. */
   go(): void {
     this.sendText('{"t":"go"}');
+  }
+
+  /** Передать «визитку» для прямой связи игроку с номером подключения to. */
+  signal(to: number, data: unknown): void {
+    this.sendText(JSON.stringify({ t: 'sig', to, data }));
+  }
+
+  /** Сообщить серверу, со сколькими игроками есть прямая связь и какой у неё худший замер, мс. */
+  reportDirect(rtt: number, n: number): void {
+    this.sendText(JSON.stringify({ t: 'p2p', rtt: Math.round(rtt), n }));
   }
 
   sendInput(step: number, input: number): void {

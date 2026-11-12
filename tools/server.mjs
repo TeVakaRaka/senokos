@@ -19,7 +19,7 @@ export const PROTOCOL = 3;
 export const MAX_PLAYERS = 4;
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-const MAX_FRAME = 4096; // байт; наши сообщения гораздо короче
+const MAX_FRAME = 16384; // байт; наши сообщения гораздо короче (самое длинное — «визитка» для прямой связи)
 const MAX_RELAY = 64; // символов в сообщении, которое пересылается другу
 const MAX_ROOMS = 200;
 const PING_MS = 10000; // как часто проверяем, что игрок ещё на связи
@@ -27,6 +27,7 @@ const TICK_MS = 1000 / 30; // шаг игры
 const MIN_DELAY = 3; // запас для ввода в одном Wi-Fi, шагов
 const MAX_DELAY = 12; // больше 0,4 с запаса играть уже невозможно
 const JITTER_MS = 40; // поправка на неровность связи и на кадры
+const DIRECT_JITTER_MS = 55; // то же для прямой связи: мобильный интернет неровнее
 const MAX_MISSED = 3; // столько проверок без ответа — и связь считается потерянной
 
 const TYPES = {
@@ -60,6 +61,16 @@ export function delayFor(rtts) {
   return Math.max(MIN_DELAY, Math.min(MAX_DELAY, steps));
 }
 
+/**
+ * Запас для ввода, когда игроки соединены напрямую. rtt — худшее время «туда и обратно»
+ * между двумя игроками, мс: дорога в одну сторону — половина.
+ */
+export function delayDirect(rtt) {
+  if (!Number.isFinite(rtt) || rtt < 0) return MAX_DELAY;
+  const steps = Math.ceil((rtt / 2 + DIRECT_JITTER_MS) / TICK_MS);
+  return Math.max(MIN_DELAY, Math.min(MAX_DELAY, steps));
+}
+
 /** Кадр WebSocket от сервера (без маски). */
 function frame(opcode, payload) {
   const len = payload.length;
@@ -89,6 +100,9 @@ class Peer {
     this.room = null;
     this.index = -1; // номер игрока в начавшейся игре
     this.rtt = NaN; // замер связи от игрока, мс
+    this.id = 0; // номер подключения: по нему игроки находят друг друга для прямой связи
+    this.directRtt = NaN; // худший замер прямой связи с остальными, мс
+    this.directCount = 0; // со сколькими игроками у него прямая связь
     this.version = '';
     this.missed = 0;
     this.gone = false;
@@ -222,11 +236,13 @@ export async function startServer(options = {}) {
    */
   const rooms = new Map();
   const peers = new Set();
+  let nextId = 1;
 
   /** Рассказать всем в комнате, кто в ней сейчас. Первый в списке начинает игру. */
   function announce(room) {
+    const ids = room.peers.map((p) => p.id);
     room.peers.forEach((p, you) =>
-      p.send({ t: 'room', count: room.peers.length, max: MAX_PLAYERS, you, host: you === 0, lan }),
+      p.send({ t: 'room', count: ids.length, max: MAX_PLAYERS, you, host: you === 0, lan, id: p.id, ids }),
     );
   }
 
@@ -259,18 +275,41 @@ export async function startServer(options = {}) {
       return;
     }
 
+    // Прямая связь между игроками: сервер только передаёт им «визитки» друг друга.
+    if (msg.t === 'sig') {
+      if (!room || typeof msg.to !== 'number') return;
+      const target = room.peers.find((p) => p.id === msg.to);
+      if (target && target !== peer) target.send({ t: 'sig', from: peer.id, data: msg.data });
+      return;
+    }
+    // Игрок сообщает, со сколькими соединился напрямую и какая там связь.
+    if (msg.t === 'p2p') {
+      peer.directCount = typeof msg.n === 'number' && msg.n >= 0 ? msg.n : 0;
+      peer.directRtt = typeof msg.rtt === 'number' && msg.rtt >= 0 ? Math.min(msg.rtt, 5000) : NaN;
+      return;
+    }
+
     if (room) {
       // Ждём игроков. Начать может только первый, и только когда есть с кем играть.
       if (msg.t !== 'go' || room.peers[0] !== peer || room.peers.length < 2) return;
       const seed = randomInt(1, 2147483647); // зерно поля придумывает сервер
-      const delay = delayFor(room.peers.map((p) => p.rtt));
+      // Если каждый соединился с каждым напрямую, ввод пойдёт мимо сервера — запас считаем
+      // по прямой связи. Иначе хотя бы одной паре придётся идти через сервер — считаем по ней.
+      const others = room.peers.length - 1;
+      const direct = room.peers.every((p) => p.directCount >= others && Number.isFinite(p.directRtt));
+      const delay = direct
+        ? delayDirect(Math.max(...room.peers.map((p) => p.directRtt)))
+        : delayFor(room.peers.map((p) => p.rtt));
       room.started = true;
       rooms.delete(room.name);
       room.peers.forEach((p, you) => {
         p.index = you;
-        p.send({ t: 'start', seed, you, players: room.peers.length, delay });
+        p.send({ t: 'start', seed, you, players: room.peers.length, delay, direct });
       });
-      log(`комната «${room.name}»: игра началась, игроков: ${room.peers.length}, запас ввода: ${delay} шаг.`);
+      log(
+        `комната «${room.name}»: игра началась, игроков: ${room.peers.length}, ` +
+          `${direct ? 'прямая связь' : 'связь через сервер'}, запас ввода: ${delay} шаг.`,
+      );
       return;
     }
 
@@ -386,6 +425,7 @@ export async function startServer(options = {}) {
       `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
     );
     const peer = new Peer(socket, onText, onGone);
+    peer.id = nextId++;
     peers.add(peer);
     if (head && head.length > 0) peer.read(head);
   });

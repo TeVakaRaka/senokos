@@ -6,6 +6,9 @@ export const MAX_PLAYERS: number;
 /** На сколько шагов вперёд отправлять ввод при таких замерах связи игроков (мс туда-обратно). */
 export function delayFor(rtts: number[]): number;
 
+/** То же, когда игроки соединены напрямую: rtt — худшее время «туда и обратно» между двумя игроками, мс. */
+export function delayDirect(rtt: number): number;
+
 export interface GameServer {
   /** Порт, на котором сервер слушает. */
   port: number;

@@ -10,7 +10,14 @@ import { createGame, step, type Game } from '../src/sim/game.ts';
 import { hashGame } from '../src/sim/hash.ts';
 import { Rng } from '../src/sim/rng.ts';
 import { DEFAULT_TUNING } from '../src/sim/tuning.ts';
-import { delayFor, MAX_PLAYERS as SERVER_MAX, PROTOCOL, startServer, type GameServer } from '../tools/server.mjs';
+import {
+  delayDirect,
+  delayFor,
+  MAX_PLAYERS as SERVER_MAX,
+  PROTOCOL,
+  startServer,
+  type GameServer,
+} from '../tools/server.mjs';
 
 const EAST = 1;
 const WEST = 33;
@@ -72,8 +79,10 @@ describe('учёт ввода «шаг в шаг»', () => {
     lock.receive(5, 3, EAST); // такого игрока нет
     for (let i = 0; i < 3; i++) lock.advance(0, frame);
     expect(lock.ready).toBe(false);
-    lock.receive(1, 3, EAST);
-    lock.receive(1, 3, WEST); // повтор другого содержания — остаётся первое
+    // Один и тот же ввод приходит двумя дорогами — напрямую и через сервер. Считается первый.
+    expect(lock.receive(1, 3, EAST)).toBe(true);
+    expect(lock.receive(1, 3, EAST)).toBe(false);
+    expect(lock.receive(1, 3, WEST)).toBe(false); // повтор другого содержания — остаётся первое
     lock.advance(0, frame);
     expect(frame[1]).toBe(EAST);
   });
@@ -376,12 +385,18 @@ describe('сервер игры по сети', () => {
   it('игроки собираются в комнате: каждый знает, сколько их и кто начинает', async () => {
     const a = connect('lobby');
     await until(() => a.rooms.length === 1);
-    expect(room(a)).toEqual({ count: 1, max: MAX_PLAYERS, you: 0, host: true, lan: server.lan });
+    expect(room(a)).toMatchObject({ count: 1, max: MAX_PLAYERS, you: 0, host: true, lan: server.lan });
+    expect(room(a).id).toBeGreaterThan(0);
+    expect(room(a).ids).toEqual([room(a).id]);
 
     const b = connect('lobby');
     await until(() => b.rooms.length === 1 && a.rooms.length === 2);
     expect(room(a).count).toBe(2);
-    expect(room(b)).toEqual({ count: 2, max: MAX_PLAYERS, you: 1, host: false, lan: server.lan });
+    expect(room(b)).toMatchObject({ count: 2, max: MAX_PLAYERS, you: 1, host: false, lan: server.lan });
+    // Каждый знает номера подключений всех в комнате — по ним игроки соединяются напрямую.
+    expect(room(b).ids).toEqual([room(a).id, room(b).id]);
+    expect(room(a).ids).toEqual(room(b).ids);
+    expect(room(a).id).not.toBe(room(b).id);
     expect(a.starts.length + b.starts.length).toBe(0); // сама игра не начинается
   });
 
@@ -422,6 +437,82 @@ describe('сервер игры по сети', () => {
       expect(d).toBeGreaterThanOrEqual(Math.max(last, INPUT_DELAY));
       last = d;
     }
+  });
+
+  it('запас для ввода при прямой связи считается по дороге между игроками', () => {
+    expect(delayDirect(4)).toBe(INPUT_DELAY); // одна сеть
+    expect(delayDirect(60)).toBe(INPUT_DELAY); // один город: 30 мс в одну сторону + поправка
+    expect(delayDirect(100)).toBe(4);
+    expect(delayDirect(200)).toBe(5);
+    expect(delayDirect(480)).toBe(9); // те же 480 мс через сервер дали бы наибольший запас
+    expect(delayDirect(Number.NaN)).toBe(12);
+    expect(delayDirect(5000)).toBe(12);
+    // Прямая связь всегда не хуже дороги через сервер с тем же замером.
+    for (let ms = 0; ms <= 800; ms += 25) expect(delayDirect(ms)).toBeLessThanOrEqual(delayFor([ms, ms]));
+  });
+
+  it('«визитки» для прямой связи доходят только адресату', async () => {
+    const a = connect('cards');
+    const b = connect('cards');
+    const c = connect('cards');
+    await until(() => [a, b, c].every((x) => x.rooms.length > 0 && room(x).count === 3));
+    const got: Record<string, [number, unknown][]> = { a: [], b: [], c: [] };
+    a.link.events.signal = (from, data) => got.a!.push([from, data]);
+    b.link.events.signal = (from, data) => got.b!.push([from, data]);
+    c.link.events.signal = (from, data) => got.c!.push([from, data]);
+
+    a.link.signal(room(b).id, { d: { type: 'offer', sdp: 'привет' } });
+    c.link.signal(room(a).id, { c: { candidate: 'адрес' } });
+    a.link.signal(999999, { d: null }); // такого игрока нет
+    a.link.signal(room(a).id, { d: null }); // самому себе — тоже никуда
+    await until(() => got.b!.length === 1 && got.a!.length === 1);
+    await pause(30);
+    expect(got.b).toEqual([[room(a).id, { d: { type: 'offer', sdp: 'привет' } }]]);
+    expect(got.a).toEqual([[room(c).id, { c: { candidate: 'адрес' } }]]);
+    expect(got.c).toEqual([]);
+  });
+
+  it('все соединились напрямую — запас считается по прямой связи; иначе — по дороге через сервер', async () => {
+    const raw = (name: string): Promise<{ ws: WebSocket; got: Record<string, unknown>[] }> =>
+      new Promise((done) => {
+        const socket = new WebSocket(ws);
+        const got: Record<string, unknown>[] = [];
+        socket.addEventListener('message', (e) => got.push(JSON.parse(String(e.data)) as Record<string, unknown>));
+        socket.addEventListener('open', () => {
+          socket.send(JSON.stringify({ t: 'join', room: name, v: 'v1' }));
+          done({ ws: socket, got });
+        });
+      });
+    const started = (x: { got: Record<string, unknown>[] }) => x.got.find((m) => m.t === 'start');
+
+    // Оба далеко от сервера (480 мс), но друг с другом соединились напрямую (60 мс).
+    const a = await raw('direct');
+    await until(() => a.got.some((m) => m.t === 'room'));
+    const b = await raw('direct');
+    await until(() => b.got.some((m) => m.t === 'room'));
+    for (const x of [a, b]) {
+      x.ws.send(JSON.stringify({ t: 'rtt', ms: 480 }));
+      x.ws.send(JSON.stringify({ t: 'p2p', rtt: 60, n: 1 }));
+    }
+    await pause(30);
+    a.ws.send(JSON.stringify({ t: 'go' }));
+    await until(() => started(a) !== undefined && started(b) !== undefined);
+    expect(started(a)).toMatchObject({ delay: INPUT_DELAY, direct: true });
+    expect(started(b)).toMatchObject({ delay: INPUT_DELAY, direct: true });
+
+    // То же, но один из двоих напрямую не соединился.
+    const c = await raw('half');
+    await until(() => c.got.some((m) => m.t === 'room'));
+    const d = await raw('half');
+    await until(() => d.got.some((m) => m.t === 'room'));
+    for (const x of [c, d]) x.ws.send(JSON.stringify({ t: 'rtt', ms: 480 }));
+    c.ws.send(JSON.stringify({ t: 'p2p', rtt: 60, n: 1 }));
+    d.ws.send(JSON.stringify({ t: 'p2p', rtt: -1, n: 0 }));
+    await pause(30);
+    c.ws.send(JSON.stringify({ t: 'go' }));
+    await until(() => started(c) !== undefined && started(d) !== undefined);
+    expect(started(c)).toMatchObject({ delay: 12, direct: false });
+    for (const x of [a, b, c, d]) x.ws.close();
   });
 
   it('игрок меряет связь с сервером, пока ждёт начала', async () => {

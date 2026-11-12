@@ -25,6 +25,7 @@ import { Recorder } from './sim/replay.ts';
 import { cloneTuning, DEFAULT_TUNING, DT, type Tuning } from './sim/tuning.ts';
 import { NetLink, type RoomState } from './net/link.ts';
 import { Lockstep } from './net/lockstep.ts';
+import { Mesh } from './net/p2p.ts';
 import { DEFAULT_ROOM, HASH_EVERY, INPUT_DELAY, NET_PROTOCOL } from './net/protocol.ts';
 import { Sound } from './audio/audio.ts';
 import { lookById, LOOKS } from './render/look.ts';
@@ -40,6 +41,14 @@ import { Platform } from './platform/platform.ts';
 
 type Mode = 'solo' | 'pvp' | 'net';
 
+/** Всё для игры по сети. */
+interface NetSetup {
+  link: NetLink;
+  lock: Lockstep;
+  direct: boolean; // все игроки соединены друг с другом напрямую, мимо сервера
+  via: { direct: number; relay: number }; // сколько вводов пришло первым напрямую и через сервер
+}
+
 /** С чем запускается день. */
 interface Setup {
   mode: Mode;
@@ -47,7 +56,7 @@ interface Setup {
   me: number; // номер своего игрока: по сети он у каждого свой
   players: number; // сколько игроков на поле
   counted: boolean; // идёт ли итог в счёт побед
-  net: { link: NetLink; lock: Lockstep } | null;
+  net: NetSetup | null;
 }
 
 const params = new URLSearchParams(location.search);
@@ -251,6 +260,9 @@ function runLobby(platformReady: Promise<void>): void {
 
     let pingMs = -1;
     let lastState: RoomState | null = null;
+    let mesh: Mesh | null = null; // прямая связь с остальными игроками
+    let roomChangedAt = performance.now();
+    const via = { direct: 0, relay: 0 };
     const draw = () => {
       const state = lastState;
       if (!state) return;
@@ -272,32 +284,86 @@ function runLobby(platformReady: Promise<void>): void {
       }
       if (!state.host) text.append(document.createElement('br'), 'Игру начнёт тот, кто зашёл первым.');
       if (pingMs >= 0) text.append(document.createElement('br'), `Связь с сервером: ${pingMs} мс.`);
+      if (state.count > 1) {
+        // Напрямую ввод идёт от игрока к игроку, мимо сервера, — так гораздо быстрее.
+        const all = mesh !== null && mesh.measured >= state.count - 1;
+        const line = all
+          ? `Прямая связь с друзьями: ${Math.round(mesh!.rtt)} мс.`
+          : performance.now() - roomChangedAt < 8000 && mesh !== null
+            ? 'Прямая связь устанавливается…'
+            : 'Прямой связи нет: игра пойдёт через сервер и будет запаздывать.';
+        text.append(document.createElement('br'), line);
+      }
       // Начинает первый в комнате — когда все в сборе.
       startButton.hidden = !state.host;
       startButton.disabled = state.count < 2;
       startButton.textContent = state.count < 2 ? 'Ждём друзей…' : `Начать игру: ${state.count}`;
     };
 
+    // Для отладки из консоли: состояние прямой связи в комнате.
+    Object.assign(window, {
+      senokosRoom: {
+        direct: () => (mesh ? { measured: mesh.measured, rtt: mesh.rtt, peers: mesh.describe() } : null),
+        via,
+      },
+    });
+
     link.events = {
       room: (state) => {
         lastState = state;
+        roomChangedAt = performance.now();
+        // С каждым, кто в комнате, пробуем соединиться напрямую.
+        if (!mesh && state.id > 0 && Mesh.supported()) {
+          const created = new Mesh(state.id, (to, card) => link.signal(to, card));
+          created.onChange = () => {
+            link.reportDirect(created.rtt, created.measured);
+            draw();
+          };
+          mesh = created;
+        }
+        mesh?.setPeers(state.ids.filter((id) => id !== state.id));
         draw();
+        window.setTimeout(draw, 8200); // если прямой связи так и нет — сказать об этом
       },
       ping: (ms) => {
         pingMs = ms;
         draw();
       },
-      start: (seed, you, players, delay) => {
+      signal: (from, card) => mesh?.signal(from, card),
+      start: (seed, you, players, delay, direct) => {
         // Запас для ввода назначает сервер — один на всех, по замеру связи игроков.
         const steps = Math.max(INPUT_DELAY, Math.min(15, Math.round(delay) || INPUT_DELAY));
-        const lock = new Lockstep(you, players, steps, (step, input) => link.sendInput(step, input));
+        const fast = mesh;
+        // Свой ввод уходит двумя дорогами: напрямую (быстро) и через сервер (наверняка).
+        const lock = new Lockstep(you, players, steps, (step, input) => {
+          link.sendInput(step, input);
+          fast?.sendInput(you, step, input);
+        });
         // Ввод остальных начинает приходить уже во время отсчёта — копим его с первой секунды.
-        link.events = { input: (from, step, input) => lock.receive(from, step, input) };
+        // Чей экземпляр пришёл первым, тот и считается.
+        link.events = {
+          input: (from, step, input) => {
+            if (lock.receive(from, step, input)) via.relay++;
+          },
+        };
+        if (fast) {
+          fast.onChange = null;
+          fast.onInput = (from, step, input) => {
+            if (lock.receive(from, step, input)) via.direct++;
+          };
+        }
         $('hud').hidden = false;
         action.hidden = true;
         startButton.hidden = true;
         share.hidden = true;
-        startGame(platformReady, { mode: 'net', seed, me: you, players, counted: false, net: { link, lock } });
+        startGame(platformReady, {
+          mode: 'net',
+          seed,
+          me: you,
+          players,
+          counted: false,
+          net: { link, lock, direct, via },
+        });
       },
       problem: (kind) => {
         startButton.hidden = true;
@@ -408,6 +474,7 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
     tool.setVisible(true);
     startAt = performance.now() + COUNTDOWN_MS;
     void platformReady.then(() => platform.setPlaying(true));
+    if (!net.direct) toast.show('Прямой связи нет — управление будет запаздывать', 'bad');
     const stop = (message: string) => {
       if (game.over || halted) return;
       halted = true;
@@ -850,7 +917,17 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
       sound,
       lock: net ? net.lock : null,
       /** По сети: сколько шагов пройдено, сколько сверок состояния сошлось, не разошлись ли игры. */
-      sync: () => (net ? { done: net.lock.done, checks: hashChecks, desynced, others: net.lock.others } : null),
+      sync: () =>
+        net
+          ? {
+              done: net.lock.done,
+              checks: hashChecks,
+              desynced,
+              others: net.lock.others,
+              direct: net.direct,
+              via: net.via,
+            }
+          : null,
       hash: () => hex8(hashGame(game)),
       freeze: (on: boolean) => {
         frozen = on;

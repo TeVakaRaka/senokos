@@ -35,14 +35,19 @@ export class Lockstep {
     }
   }
 
-  /** Пришёл ввод игрока from на шаг step. Мусор (не тот игрок, шаг, не число) отбрасывается. */
-  receive(from: number, step: number, input: number): void {
-    if (!Number.isInteger(from) || from < 0 || from >= this.players || from === this.me) return;
-    if (!Number.isInteger(step) || !Number.isInteger(input)) return;
-    if (step < this.delay || step > this.done + 100000) return;
+  /**
+   * Пришёл ввод игрока from на шаг step. Мусор (не тот игрок, шаг, не число) отбрасывается.
+   * Один и тот же ввод может прийти дважды — напрямую и через сервер: считается первый.
+   * Возвращает true, если ввод был новым.
+   */
+  receive(from: number, step: number, input: number): boolean {
+    if (!Number.isInteger(from) || from < 0 || from >= this.players || from === this.me) return false;
+    if (!Number.isInteger(step) || !Number.isInteger(input)) return false;
+    if (step < this.delay || step > this.done + 100000) return false;
     const list = this.inputs[from]!;
-    if (list[step] !== undefined) return; // повтор: первое слово дороже второго
+    if (list[step] !== undefined) return false; // повтор: первое слово дороже второго
     list[step] = input & 255;
+    return true;
   }
 
   /**
