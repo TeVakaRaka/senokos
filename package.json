@@ -11,7 +11,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "bot": "node tools/bot-run.mjs",
-    "xengine": "vite build --config vite.sim.config.ts && node tools/xengine.mjs"
+    "xengine": "vite build --config vite.sim.config.ts && node tools/xengine.mjs",
+    "deploy": "sh tools/deploy.sh"
   },
   "dependencies": {
     "three": "0.187.0"
