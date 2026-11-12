@@ -1,0 +1,26 @@
+{
+  "name": "senokos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Сенокос — прототип одного дня",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "node tools/make-selftest.mjs && vite build",
+    "preview": "vite preview --host",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "bot": "node tools/bot-run.mjs",
+    "xengine": "vite build --config vite.sim.config.ts && node tools/xengine.mjs"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.187.0",
+    "lil-gui": "0.21.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}

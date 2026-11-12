@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-sim/
+.DS_Store
+*.log
+public/selftest.json
+.env
+.env.*
+# Звуки из личной библиотеки автора: в публичный репозиторий не идут, пока не проверены права
+public/audio/
