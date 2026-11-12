@@ -8,8 +8,9 @@ import { DT, TICK_RATE, type Tuning } from './tuning.ts';
 export const PERK_ARC = 0; // шире дуга
 export const PERK_REACH = 1; // длиннее коса
 export const PERK_RATE = 2; // чаще взмах
-export const PERK_CARRY = 3; // больше охапка
-export const PERK_COUNT = 4;
+export const PERK_CARRY = 3; // больше тюк
+export const PERK_RAKE = 4; // шире грабли
+export const PERK_COUNT = 5;
 
 /** Ввод 65, 66, 67 — выбор первой, второй или третьей карточки. */
 export const CHOICE_BASE = 65;
@@ -25,7 +26,8 @@ export interface Derived {
   swingTicks: number;
   damage: number;
   mowSpeed: number; // шаг косаря, м/с
-  carryCap: number; // вместимость охапки, кг
+  carryCap: number; // вместимость тюка, кг
+  rakeRadius: number; // ширина граблей, м
 }
 
 export function derive(t: Tuning, perks: readonly number[]): Derived {
@@ -45,6 +47,7 @@ export function derive(t: Tuning, perks: readonly number[]): Derived {
     damage: Math.max(1, Math.round(t.damage)),
     mowSpeed: (t.stepFrac * reach) / (swingTicks * DT),
     carryCap: t.carryCap + perks[PERK_CARRY]! * t.carryPerLevel,
+    rakeRadius: t.rakeRadius + perks[PERK_RAKE]! * t.rakePerLevel,
   };
 }
 

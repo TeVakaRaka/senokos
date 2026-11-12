@@ -48,7 +48,9 @@ describe('одинаковость симуляции', () => {
     const { g } = playBot(1, TICKS);
     expect(g.swings).toBeGreaterThan(20);
     expect(g.cutTufts).toBeGreaterThan(200);
-    expect(g.field.standing).toBe(g.field.count - g.cutTufts);
+    const fresh = createGame(1);
+    const yesterday = fresh.field.count - fresh.field.standing; // скошено накануне
+    expect(g.field.standing).toBe(g.field.count - g.cutTufts - yesterday);
     expect(g.stacked).toBeGreaterThan(20);
     expect(g.level).toBeGreaterThan(1);
   });

@@ -262,7 +262,7 @@ body {
   color: #8a1f0d;
 }
 
-/* Полоска охапки над героем */
+/* Полоска тюка над героем: сколько сена уже сгребли */
 #carry {
   position: fixed;
   left: 0;
@@ -271,7 +271,8 @@ body {
   height: 7px;
   margin: -3px 0 0 -23px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(20, 28, 12, 0.7);
+  box-shadow: 0 0 0 1.5px rgba(251, 246, 227, 0.95), 0 1px 4px rgba(0, 0, 0, 0.35);
   overflow: hidden;
   pointer-events: none;
   opacity: 0;

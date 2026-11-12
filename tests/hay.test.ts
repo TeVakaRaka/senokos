@@ -1,8 +1,10 @@
-// Правила шага 2: кучки, сушка, сбор, охапка, стог, перки, конец дня.
+// Правила сена: покос лежит и сохнет на месте, грабли сгребают сухое в тюк,
+// тюк выгружается в стог, перки, конец дня.
 
 import { describe, expect, it } from 'vitest';
+import { botInput, createBot } from '../src/sim/bot.ts';
 import { createGame, step, type Game } from '../src/sim/game.ts';
-import { groundKg, type Pile } from '../src/sim/hay.ts';
+import { dryKg, groundKg } from '../src/sim/hay.ts';
 import {
   CHOICE_BASE,
   derive,
@@ -10,32 +12,29 @@ import {
   PERK_ARC,
   PERK_CARRY,
   PERK_COUNT,
+  PERK_RAKE,
   PERK_RATE,
   PERK_REACH,
 } from '../src/sim/perks.ts';
 import { cloneTuning, DEFAULT_TUNING, DT, TICK_RATE, type Tuning } from '../src/sim/tuning.ts';
 
 const EAST = 1; // направление 0: вдоль +x
+const WEST = 33; // направление 32: вдоль −x
 
+/** Сплошное поле без камней, голых пятен и вчерашнего сена. */
 function tuning(patch: Partial<Tuning> = {}): Tuning {
-  return { ...cloneTuning(DEFAULT_TUNING), fieldSize: 64, coverage: 1.5, rockCount: 0, ...patch };
+  return { ...cloneTuning(DEFAULT_TUNING), fieldSize: 64, coverage: 1.5, rockCount: 0, yesterdayKg: 0, ...patch };
 }
 
 function run(g: Game, input: number, ticks: number): void {
   for (let i = 0; i < ticks; i++) step(g, input);
 }
 
-/** Вся масса сена в игре: на земле, в охапке и в стогу. */
+/** Вся масса сена в игре: на земле, в тюке и в стогу. */
 function totalKg(g: Game): number {
   return groundKg(g) + g.hero.load + g.stacked;
 }
 
-/** Убрать «вчерашнее» сено, чтобы проверять только своё. */
-function noYesterday(patch: Partial<Tuning> = {}): Tuning {
-  return tuning({ yesterdayKg: 0, ...patch });
-}
-
-/** Поставить героя в точку. */
 function placeHero(g: Game, x: number, y: number): void {
   g.hero.x = x;
   g.hero.y = y;
@@ -48,81 +47,131 @@ function farFromStack(g: Game): void {
   placeHero(g, g.stackX + 9, g.stackY);
 }
 
-describe('кучки и сушка', () => {
-  it('каждый взмах кладёт срезанное кучкой за спиной героя', () => {
-    const g = createGame(7, noYesterday());
+/** Положить на кустик сухое сено, будто его скосили давно. */
+function layDryHay(g: Game, i: number, kg: number): void {
+  const f = g.field;
+  if (f.hp[i] !== 0) f.standing--;
+  f.hp[i] = 0;
+  f.hay[i] = kg;
+  f.cutTick[i] = g.tick - g.dryTicks;
+}
+
+/** Ближайший к точке кустик на расстоянии от min до max. */
+function tuftAtDistance(g: Game, x: number, y: number, min: number, max: number): number {
+  const f = g.field;
+  for (let i = 0; i < f.count; i++) {
+    const d = Math.hypot(f.x[i]! - x, f.y[i]! - y);
+    if (d >= min && d <= max) return i;
+  }
+  throw new Error('нет кустика на нужном расстоянии');
+}
+
+describe('покос лежит и сохнет на месте', () => {
+  it('срезанное остаётся лежать там, где росло', () => {
+    const g = createGame(7, tuning());
+    farFromStack(g);
     run(g, EAST, 120);
-    expect(g.swings).toBeGreaterThan(3);
-    expect(g.piles.length).toBeGreaterThan(0);
-    // Кучки лежат позади героя (он идёт вдоль +x).
-    for (const p of g.piles) expect(p.x).toBeLessThan(g.hero.x);
+    expect(g.cutTufts).toBeGreaterThan(50);
+    const f = g.field;
+    let lying = 0;
+    for (let i = 0; i < f.count; i++) {
+      if (f.hp[i] === 0) {
+        expect(f.hay[i]).toBeCloseTo(g.tuning.grassYield[0], 12);
+        lying++;
+      } else {
+        expect(f.hay[i]).toBe(0);
+      }
+    }
+    expect(lying).toBe(g.cutTufts);
     expect(groundKg(g)).toBeCloseTo(g.cutKg, 9);
+    expect(g.hero.load).toBe(0);
   });
 
-  it('масса сена сохраняется: скошено + вчерашнее = земля + охапка + стог', () => {
+  it('масса сена сохраняется: скошено + вчерашнее = земля + тюк + стог', () => {
     const g = createGame(3);
     const start = totalKg(g);
-    expect(start).toBeCloseTo(g.tuning.yesterdayKg, 9);
-    for (let i = 0; i < 3000; i++) step(g, ((i >> 7) % 64) + 1);
+    expect(start).toBeGreaterThanOrEqual(g.tuning.yesterdayKg);
+    expect(start).toBeLessThan(g.tuning.yesterdayKg + 1);
+    const bot = createBot(3);
+    for (let i = 0; i < 4000; i++) step(g, botInput(g, bot));
+    expect(g.stacked).toBeGreaterThan(10);
     expect(totalKg(g)).toBeCloseTo(start + g.cutKg, 6);
   });
 
-  it('кучка становится готовой ровно через время сушки', () => {
-    const g = createGame(7, noYesterday());
-    run(g, EAST, 40);
-    const pile = g.piles[0]!;
-    expect(pile.dry).toBeLessThan(1);
-    const dryTicks = Math.ceil((1 - pile.dry) * g.tuning.dryTime * TICK_RATE);
-    let readyAt = -1;
-    for (let i = 1; i <= dryTicks + 2; i++) {
-      step(g, 0);
-      if (g.readyIds.includes(pile.id)) readyAt = i;
-    }
-    expect(readyAt).toBeGreaterThanOrEqual(dryTicks - 1);
-    expect(readyAt).toBeLessThanOrEqual(dryTicks + 1);
-    expect(pile.dry).toBe(1);
+  it('сырое сено грабли не берут, сухое — берут', () => {
+    const g = createGame(7, tuning());
+    farFromStack(g);
+    run(g, EAST, 90); // прокосил полосу
+    run(g, WEST, 40); // сразу назад по своей полосе: сено ещё сырое
+    expect(g.hero.load).toBe(0);
+    expect(dryKg(g)).toBe(0);
+    run(g, 0, g.dryTicks); // подождал, пока высохнет
+    expect(dryKg(g)).toBeGreaterThan(1);
+    run(g, EAST, 40); // прошёл по сухому
+    expect(g.hero.load).toBeGreaterThan(1);
   });
 
-  it('сырая кучка не подбирается, готовая — подбирается', () => {
-    const g = createGame(7, noYesterday());
+  it('высыхает ровно через время сушки', () => {
+    const g = createGame(7, tuning());
     farFromStack(g);
     run(g, EAST, 40);
-    const pile = g.piles[0]!;
-    placeHero(g, pile.x, pile.y);
-    step(g, 0);
-    expect(g.hero.load).toBe(0);
-    run(g, 0, g.tuning.dryTime * TICK_RATE + 2);
-    expect(g.hero.load).toBeGreaterThan(0);
-    expect(g.piles.find((p) => p.id === pile.id)).toBeUndefined();
+    const i = g.cutIdx[0] ?? -1;
+    const cutAt = g.field.cutTick.find((t, k) => g.field.hp[k] === 0 && t > 0)!;
+    expect(i).toBeGreaterThanOrEqual(-1);
+    const wait = cutAt + g.dryTicks - g.tick;
+    run(g, 0, wait - 1);
+    const before = dryKg(g);
+    run(g, 0, 1);
+    expect(dryKg(g)).toBeGreaterThan(before);
+    expect(g.dryTicks).toBe(Math.round(g.tuning.dryTime * TICK_RATE));
   });
 });
 
-describe('охапка', () => {
-  it('забирает из кучки ровно столько, сколько влезает', () => {
-    const g = createGame(7, noYesterday());
+describe('грабли и тюк', () => {
+  it('гребут только в своём радиусе', () => {
+    const g = createGame(7, tuning());
+    farFromStack(g);
+    const r = g.d.rakeRadius;
+    const near = tuftAtDistance(g, g.hero.x, g.hero.y, 0, r - 0.2);
+    const far = tuftAtDistance(g, g.hero.x, g.hero.y, r + 0.3, r + 1.2);
+    layDryHay(g, near, 0.1);
+    layDryHay(g, far, 0.1);
+    step(g, 0);
+    expect(g.field.hay[near]).toBe(0);
+    expect(g.field.hay[far]).toBeCloseTo(0.1, 12);
+    expect(g.hero.load).toBeCloseTo(0.1, 12);
+    expect(g.rakeCount).toBe(1);
+    expect(g.rakeIdx[0]).toBe(near);
+  });
+
+  it('тюк не переполняется: лишнее остаётся лежать', () => {
+    const g = createGame(7, tuning());
+    farFromStack(g);
     const cap = g.d.carryCap;
-    const pile: Pile = { id: 999, x: 10, y: 10, mass: 2, dry: 1 };
-    g.piles.push(pile);
-    placeHero(g, 10, 10);
+    const tuft = tuftAtDistance(g, g.hero.x, g.hero.y, 0, 0.5);
+    layDryHay(g, tuft, 2);
     g.hero.load = cap - 0.5;
     step(g, 0);
     expect(g.hero.load).toBe(cap);
-    expect(pile.mass).toBeCloseTo(1.5, 9);
-    expect(g.piles).toContain(pile);
+    expect(g.field.hay[tuft]).toBeCloseTo(1.5, 9);
+    expect(g.rakeCount).toBe(0); // кустик сгребён не начисто
   });
 
-  it('с полной охапкой коса не машет и не замедляет', () => {
-    const g = createGame(7, noYesterday());
+  it('с полным тюком коса не машет и грабли не гребут', () => {
+    const g = createGame(7, tuning());
     farFromStack(g);
     g.hero.load = g.d.carryCap;
+    const tuft = tuftAtDistance(g, g.hero.x, g.hero.y, 0, 0.5);
+    layDryHay(g, tuft, 0.1);
     run(g, EAST, 200);
     expect(g.swings).toBe(0);
     expect(g.needAhead).toBe(0);
+    expect(g.field.hay[tuft]).toBeCloseTo(0.1, 12);
   });
 
   it('груз замедляет героя', () => {
-    const empty = createGame(7, noYesterday({ coverage: 0 }));
-    const loaded = createGame(7, noYesterday({ coverage: 0 }));
+    const empty = createGame(7, tuning({ coverage: 0 }));
+    const loaded = createGame(7, tuning({ coverage: 0 }));
     farFromStack(empty);
     farFromStack(loaded);
     loaded.hero.load = loaded.d.carryCap;
@@ -134,8 +183,8 @@ describe('охапка', () => {
 });
 
 describe('стог', () => {
-  it('у стога охапка выгружается в стог целиком', () => {
-    const g = createGame(7, noYesterday());
+  it('у стога тюк выгружается в стог целиком', () => {
+    const g = createGame(7, tuning());
     placeHero(g, g.stackX + 2, g.stackY);
     g.hero.load = 6; // меньше порога первого перка — выгрузка не прервётся выбором
     run(g, 0, 30);
@@ -143,8 +192,8 @@ describe('стог', () => {
     expect(g.stacked).toBeCloseTo(6, 9);
   });
 
-  it('вдали от стога охапка не выгружается', () => {
-    const g = createGame(7, noYesterday());
+  it('вдали от стога тюк не выгружается', () => {
+    const g = createGame(7, tuning());
     placeHero(g, g.stackX + 8, g.stackY);
     g.hero.load = 10;
     run(g, 0, 30);
@@ -152,27 +201,24 @@ describe('стог', () => {
     expect(g.stacked).toBe(0);
   });
 
-  it('вчерашнее сено даёт первый перк в первые секунды', () => {
+  it('вчерашний покос лежит сухим рядом с героем и даёт первый перк в первые секунды', () => {
     const g = createGame(7);
+    expect(dryKg(g)).toBeGreaterThanOrEqual(g.tuning.yesterdayKg);
+    expect(g.cutTufts).toBe(0); // вчерашнее в сегодняшний покос не считается
+    const bot = createBot(7);
     let ticks = 0;
-    // Обходит стог по кругу против часовой стрелки — там лежат вчерашние кучки.
-    while (g.offer === null && ticks < 300) {
-      const dx = g.hero.x - g.stackX;
-      const dy = g.hero.y - g.stackY;
-      // Касательная к окружности вокруг стога (поворот радиус-вектора на 90°).
-      const angle = Math.atan2(dx, -dy);
-      const dir = ((Math.round((angle / (2 * Math.PI)) * 64) % 64) + 64) % 64;
-      step(g, dir + 1);
+    while (g.offer === null && ticks < 600) {
+      step(g, botInput(g, bot));
       ticks++;
     }
     expect(g.offer).not.toBeNull();
-    expect(ticks * DT).toBeLessThan(6);
+    expect(ticks * DT).toBeLessThan(10);
   });
 });
 
 describe('перки', () => {
   function withOffer(): Game {
-    const g = createGame(7, noYesterday());
+    const g = createGame(7, tuning());
     placeHero(g, g.stackX + 2, g.stackY);
     g.hero.load = levelThreshold(g.tuning, 0) + 0.5;
     run(g, 0, 30);
@@ -184,7 +230,10 @@ describe('перки', () => {
     const g = withOffer();
     expect(g.offer!.length).toBe(3);
     expect(new Set(g.offer!).size).toBe(3);
-    for (const p of g.offer!) expect(p).toBeGreaterThanOrEqual(0);
+    for (const p of g.offer!) {
+      expect(p).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThan(PERK_COUNT);
+    }
   });
 
   it('пока игрок выбирает, время стоит', () => {
@@ -206,13 +255,15 @@ describe('перки', () => {
 
   it('каждый перк меняет только свои числа', () => {
     const t = cloneTuning(DEFAULT_TUNING);
-    const base = derive(t, [0, 0, 0, 0]);
-    const one = (perk: number) => derive(t, [0, 1, 2, 3].map((p) => (p === perk ? 1 : 0)));
+    const none = new Array<number>(PERK_COUNT).fill(0);
+    const base = derive(t, none);
+    const one = (perk: number) => derive(t, none.map((_, p) => (p === perk ? 1 : 0)));
 
     const arc = one(PERK_ARC);
     expect(arc.arcDeg).toBe(base.arcDeg + t.arcPerLevel);
     expect(arc.reach).toBe(base.reach);
     expect(arc.carryCap).toBe(base.carryCap);
+    expect(arc.rakeRadius).toBe(base.rakeRadius);
 
     const reach = one(PERK_REACH);
     expect(reach.reach).toBeCloseTo(base.reach + t.reachPerLevel, 12);
@@ -226,6 +277,11 @@ describe('перки', () => {
     const carry = one(PERK_CARRY);
     expect(carry.carryCap).toBe(base.carryCap + t.carryPerLevel);
     expect(carry.swingTicks).toBe(base.swingTicks);
+
+    const wide = one(PERK_RAKE);
+    expect(wide.rakeRadius).toBeCloseTo(base.rakeRadius + t.rakePerLevel, 12);
+    expect(wide.carryCap).toBe(base.carryCap);
+    expect(wide.reach).toBe(base.reach);
   });
 
   it('перки на максимуме больше не предлагаются', () => {
@@ -235,9 +291,8 @@ describe('перки', () => {
     step(g, CHOICE_BASE); // взять что-то из текущего предложения
     g.hero.load = 200;
     run(g, 0, 40);
-    if (g.offer) for (const p of g.offer) {
-      expect(p === PERK_ARC || p === PERK_REACH).toBe(false);
-    }
+    expect(g.offer).not.toBeNull();
+    for (const p of g.offer!) expect(p === PERK_ARC || p === PERK_REACH).toBe(false);
   });
 
   it('пороги после списка продолжают расти', () => {
@@ -253,7 +308,8 @@ describe('перки', () => {
 
 describe('конец дня', () => {
   it('день кончается в срок, после этого ничего не меняется', () => {
-    const g = createGame(7, noYesterday({ dayLength: 2 }));
+    const g = createGame(7, tuning({ dayLength: 2 }));
+    farFromStack(g);
     run(g, EAST, 60);
     expect(g.over).toBe(true);
     expect(g.tick).toBe(60);

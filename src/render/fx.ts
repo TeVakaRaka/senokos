@@ -1,4 +1,4 @@
-// Летящие клочки: трава от взмаха, сено в охапку и в стог, искры у готовой кучки.
+// Летящие клочки: трава от взмаха, сено из-под граблей в тюк и из тюка в стог.
 // Чисто для глаз: на счёт не влияют.
 
 import * as THREE from 'three';
@@ -65,7 +65,7 @@ export class CutBits {
     }
   }
 
-  /** Клочки летят дугой из одной точки в другую (в охапку, в стог). */
+  /** Клочки летят дугой из одной точки в другую (в тюк, в стог). */
   spawnToward(fx: number, fy: number, fz: number, tx: number, ty: number, tz: number, amount: number, color: number): void {
     this.color.setHex(color);
     for (let i = 0; i < amount; i++) {
@@ -86,29 +86,6 @@ export class CutBits {
           age: 0,
           life,
           gravity,
-        },
-        this.color,
-      );
-    }
-  }
-
-  /** Искры вверх — кучка высохла. */
-  sparkle(x: number, z: number, color: number): void {
-    this.color.setHex(color);
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2 + Math.random();
-      this.push(
-        {
-          x,
-          y: 0.35,
-          z,
-          vx: Math.cos(a) * 0.9,
-          vy: 2.6 + Math.random(),
-          vz: Math.sin(a) * 0.9,
-          spin: 10,
-          age: 0,
-          life: 0.5,
-          gravity: 6,
         },
         this.color,
       );

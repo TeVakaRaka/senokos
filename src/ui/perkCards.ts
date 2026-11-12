@@ -1,6 +1,6 @@
 // Карточки перков: игра на паузе, игрок нажимает одну из трёх.
 
-import { PERK_ARC, PERK_CARRY, PERK_RATE, PERK_REACH } from '../sim/perks.ts';
+import { PERK_ARC, PERK_CARRY, PERK_RAKE, PERK_RATE, PERK_REACH } from '../sim/perks.ts';
 import type { Tuning } from '../sim/tuning.ts';
 
 interface PerkText {
@@ -27,8 +27,13 @@ const TEXTS: Record<number, PerkText> = {
   },
   [PERK_CARRY]: {
     icon: '🌾',
-    title: 'Больше охапка',
-    describe: (t) => `Уносишь на ${fmt(t.carryPerLevel)} кг больше`,
+    title: 'Больше тюк',
+    describe: (t) => `В тюк влезает на ${fmt(t.carryPerLevel)} кг больше`,
+  },
+  [PERK_RAKE]: {
+    icon: '🧹',
+    title: 'Шире грабли',
+    describe: (t) => `Гребут на ${fmt(t.rakePerLevel * 200)} см шире`,
   },
 };
 

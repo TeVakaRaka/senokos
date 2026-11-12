@@ -1,23 +1,25 @@
 // Бот-автопилот. Играет по тем же правилам, что человек: отдаёт симуляции один байт ввода
 // за шаг. Нужен для тестов, подбора баланса и показа игры без рук.
 //
-// Порядок решений: выбрать перк → отнести полную охапку в стог → подобрать готовые кучки →
-// косить полосами туда-обратно (пока скошенное ещё успеет высохнуть до вечера).
+// Порядок решений: выбрать перк → отвезти полный тюк в стог → сгрести сухое сено, когда его
+// набралось на тюк → косить полосами туда-обратно (пока скошенное успеет высохнуть до вечера).
 
 import { dirFromVector } from './dirs.ts';
-import { nearestStanding, standingInRect } from './field.ts';
+import { nearestStanding, nearestTuft, standingInRect } from './field.ts';
 import type { Game } from './game.ts';
-import { CHOICE_BASE, PERK_ARC, PERK_CARRY, PERK_RATE, PERK_REACH } from './perks.ts';
+import { dryKg } from './hay.ts';
+import { CHOICE_BASE, PERK_ARC, PERK_CARRY, PERK_RAKE, PERK_RATE, PERK_REACH } from './perks.ts';
 import { Rng } from './rng.ts';
 import { DT } from './tuning.ts';
 
 /** Каким перкам бот отдаёт предпочтение (по порядку). */
-const PERK_PRIORITY = [PERK_CARRY, PERK_REACH, PERK_RATE, PERK_ARC];
+const PERK_PRIORITY = [PERK_CARRY, PERK_REACH, PERK_RATE, PERK_RAKE, PERK_ARC];
 
 export interface Bot {
   rng: Rng;
   started: boolean;
   dir: number; // текущее направление 0…63 или −1
+  raking: boolean; // сейчас сгребает сено, а не косит
   laneY: number; // линия текущей полосы
   laneSign: number; // +1 — идём вдоль +x, −1 — вдоль −x
   sweep: number; // +1 — следующие полосы в сторону +y, −1 — в сторону −y
@@ -31,6 +33,7 @@ export function createBot(seed: number): Bot {
     rng: new Rng((seed ^ 0x2545f491) >>> 0),
     started: false,
     dir: -1,
+    raking: false,
     laneY: 0,
     laneSign: 1,
     sweep: 1,
@@ -72,30 +75,41 @@ export function botInput(g: Game, b: Bot): number {
   const sy = g.stackY - h.y;
   const stackDist = Math.sqrt(sx * sx + sy * sy);
 
-  // 1. В стог: охапка полная, или набрано прилично и рядом ничего готового, или вечер.
+  const full = h.load >= cap - 1e-9;
+
+  // 1. В стог: тюк полон или день кончается, а в тюке что-то есть.
+  const lateDay = timeLeft < stackDist / (t.runSpeed * 0.6) + 2;
+  if (full || (h.load > 0 && lateDay)) {
+    b.raking = false;
+    if (stackDist <= t.stackReach - 0.15) return idle(b); // выгружается
+    return go(b, sx, sy);
+  }
+
+  // 2. Грести: когда сухого сена набралось больше чем на полтюка (или сколько в тюк ещё
+  // влезет), а под вечер — пока оно вообще есть.
+  const dry = dryKg(g);
+  const worth = Math.min(cap - h.load, cap * 0.6);
+  if (b.raking) {
+    if (dry <= 1e-9) b.raking = false;
+  } else if (dry >= worth || (dry > 0 && timeLeft < t.dryTime + 8)) {
+    b.raking = true;
+  }
+  if (b.raking) {
+    const target = nearestDry(g);
+    if (target >= 0) return go(b, g.field.x[target]! - h.x, g.field.y[target]! - h.y);
+    b.raking = false;
+  }
+
+  // 3. Сгребать больше нечего, а в тюке что-то есть — отвезти.
   if (h.load > 0) {
-    const nearReady = nearestReadyPile(g, 8);
-    const loaded = h.load >= cap - 1e-9;
-    const enough = h.load >= cap * 0.5 && nearReady < 0;
-    const lateDay = timeLeft < stackDist / (t.runSpeed * 0.5) + 3;
-    const nothingLeft = nearestReadyPile(g, Infinity) < 0 && timeLeft < t.dryTime + 4;
-    if (loaded || enough || lateDay || nothingLeft) {
-      if (stackDist <= t.stackReach - 0.15) return idle(b); // выгружается
-      return go(b, sx, sy);
-    }
+    if (stackDist <= t.stackReach - 0.15) return idle(b);
+    return go(b, sx, sy);
   }
 
-  // 2. Подобрать готовую кучку.
-  const pile = nearestReadyPile(g, Infinity);
-  if (pile >= 0) {
-    const p = g.piles[pile]!;
-    return go(b, p.x - h.x, p.y - h.y);
-  }
-
-  // 3. Косить, если скошенное успеет высохнуть до конца дня.
+  // 4. Косить, если скошенное успеет высохнуть до конца дня.
   if (timeLeft > t.dryTime + 6 && g.field.standing > 0) return mowLanes(g, b);
 
-  // 4. Делать нечего: ждать у стога, пока досохнут кучки.
+  // 5. Делать нечего: ждать у стога, пока досохнет.
   if (stackDist > t.stackReach) return go(b, sx, sy);
   return idle(b);
 }
@@ -118,23 +132,10 @@ function idle(b: Bot): number {
   return 0;
 }
 
-/** Индекс ближайшей готовой кучки не дальше maxDist или −1. */
-function nearestReadyPile(g: Game, maxDist: number): number {
-  const h = g.hero;
-  let best = -1;
-  let bestD2 = maxDist * maxDist;
-  for (let i = 0; i < g.piles.length; i++) {
-    const p = g.piles[i]!;
-    if (p.dry < 1) continue;
-    const dx = p.x - h.x;
-    const dy = p.y - h.y;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < bestD2) {
-      bestD2 = d2;
-      best = i;
-    }
-  }
-  return best;
+/** Индекс ближайшего кустика с сухим сеном или −1. */
+function nearestDry(g: Game): number {
+  const f = g.field;
+  return nearestTuft(f, g.hero.x, g.hero.y, Infinity, (i) => f.hay[i]! > 0 && g.tick - f.cutTick[i]! >= g.dryTicks);
 }
 
 /**

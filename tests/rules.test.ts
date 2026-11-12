@@ -9,11 +9,11 @@ const EAST = 1; // ввод «направление 0»: вдоль +x
 const WEST = 33; // направление 32: вдоль −x
 
 /**
- * Сплошное поле без камней и голых пятен — чтобы проверять геометрию полосы.
+ * Сплошное поле без камней, голых пятен и вчерашнего покоса — чтобы проверять геометрию полосы.
  * Поле больше обычного, иначе герой за время замера упирается в край.
  */
 function solidTuning(patch: Partial<Tuning> = {}): Tuning {
-  return { ...cloneTuning(DEFAULT_TUNING), fieldSize: 64, coverage: 1.5, rockCount: 0, ...patch };
+  return { ...cloneTuning(DEFAULT_TUNING), fieldSize: 64, coverage: 1.5, rockCount: 0, yesterdayKg: 0, ...patch };
 }
 
 function run(g: Game, input: number, ticks: number): void {

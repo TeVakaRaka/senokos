@@ -168,8 +168,7 @@ function startGame(): void {
       sound.swing(fx.swingCut / 25);
       platform.haptic();
     }
-    if (fx.ready > 0) sound.chime();
-    if (fx.picked > 0) sound.pickup();
+    if (fx.raked > 0) sound.rake();
     if (fx.unloaded > 0) sound.thump();
   }
 
@@ -310,9 +309,10 @@ async function openDebugPanel(current: Tuning): Promise<void> {
   gui.add(draft, 'grassTypes', 1, 2, 1).name('видов травы');
   gui.add(draft, 'dayLength', 30, 300, 10).name('длина дня, с');
   gui.add(draft, 'dryTime', 4, 40, 1).name('сушка, с');
-  gui.add(draft, 'carryCap', 4, 40, 1).name('охапка, кг');
+  gui.add(draft, 'carryCap', 4, 40, 1).name('тюк, кг');
   gui.add(draft, 'carrySlow', 0, 0.8, 0.05).name('груз тормозит, доля');
-  gui.add(draft, 'pickupRadius', 0.5, 3, 0.1).name('подбор, м');
+  gui.add(draft, 'rakeRadius', 0.5, 3, 0.1).name('ширина граблей, м');
+  gui.add(draft, 'yesterdayKg', 0, 40, 1).name('вчерашнее сено, кг');
   gui.add(
     {
       restart: () => {

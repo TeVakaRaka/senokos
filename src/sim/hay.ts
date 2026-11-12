@@ -1,140 +1,72 @@
-// Сено: кучки на поле, сушка, сбор в охапку и выгрузка в стог.
+// Сено. Скошенная трава остаётся лежать там, где её срезали, и сохнет на месте.
+// Сухое сено грабли сгребают в тюк, который косарь тащит за собой; у стога тюк выгружается.
 
+import { cellCoord } from './field.ts';
 import type { Game } from './game.ts';
-import { STACK_RADIUS } from './gen.ts';
 import { DT } from './tuning.ts';
 
-export interface Pile {
-  id: number;
-  x: number;
-  y: number;
-  mass: number; // кг
-  dry: number; // 0 — только скошена, 1 — готова
+/** Высохло ли скошенное на месте кустика i. */
+export function isDry(g: Game, i: number): boolean {
+  return g.tick - g.field.cutTick[i]! >= g.dryTicks;
 }
 
-export interface PickEvent {
-  id: number;
-  x: number;
-  y: number;
-  kg: number;
-  removed: boolean; // кучку забрали целиком
+/** Доля высыхания 0…1 (для бота и подсказок). */
+export function dryness(g: Game, i: number): number {
+  const d = (g.tick - g.field.cutTick[i]!) / g.dryTicks;
+  return d < 0 ? 0 : d > 1 ? 1 : d;
 }
 
-export const MAX_PILES = 1500;
-const MERGE_RADIUS = 0.6; // свежие кучки ближе этого сливаются в одну
-const MERGE_MAX_DRY = 0.25; // сливаются только недавно скошенные
-
-/** Сушка: все несухие кучки сохнут с силой sun (1 — полное солнце, 0 — не сохнут). */
-export function dryPiles(g: Game, sun: number): void {
-  if (sun <= 0) return;
-  const rate = (DT / g.tuning.dryTime) * sun;
-  const piles = g.piles;
-  for (let i = 0; i < piles.length; i++) {
-    const p = piles[i]!;
-    if (p.dry >= 1) continue;
-    p.dry += rate;
-    if (p.dry >= 1) {
-      p.dry = 1;
-      g.readyIds.push(p.id);
-    }
-  }
-}
-
-/** Положить скошенное сено кучкой в точку (x, y). */
-export function dropPile(g: Game, kg: number, px: number, py: number): void {
-  const t = g.tuning;
-  let x = px;
-  let y = py;
-  const lo = 0.3;
-  const hi = t.fieldSize - 0.3;
-  x = x < lo ? lo : x > hi ? hi : x;
-  y = y < lo ? lo : y > hi ? hi : y;
-
-  // Не класть кучку внутрь стога или камня.
-  const pushOut = (cx: number, cy: number, r: number) => {
-    const dx = x - cx;
-    const dy = y - cy;
-    const d2 = dx * dx + dy * dy;
-    if (d2 >= r * r) return;
-    const d = Math.sqrt(d2);
-    if (d > 1e-6) {
-      x = cx + (dx / d) * r;
-      y = cy + (dy / d) * r;
-    } else {
-      x = cx + r;
-    }
-  };
-  pushOut(g.stackX, g.stackY, STACK_RADIUS + 0.3);
-  for (let i = 0; i < g.rocks.length; i++) {
-    const rock = g.rocks[i]!;
-    pushOut(rock.x, rock.y, rock.r + 0.25);
-  }
-
-  const piles = g.piles;
-  const r2 = MERGE_RADIUS * MERGE_RADIUS;
-  for (let i = 0; i < piles.length; i++) {
-    const p = piles[i]!;
-    if (p.dry > MERGE_MAX_DRY) continue;
-    const dx = p.x - x;
-    const dy = p.y - y;
-    if (dx * dx + dy * dy <= r2) {
-      mergeInto(p, kg);
-      return;
-    }
-  }
-  if (piles.length >= MAX_PILES) {
-    mergeInto(piles[piles.length - 1]!, kg);
-    return;
-  }
-  const id = g.nextPileId++;
-  piles.push({ id, x, y, mass: kg, dry: 0 });
-  g.newPileIds.push(id);
-}
-
-/** Добавить свежего сена в кучку: её сушка откатывается пропорционально массе. */
-function mergeInto(p: Pile, kg: number): void {
-  const total = p.mass + kg;
-  p.dry = (p.dry * p.mass) / total;
-  p.mass = total;
-}
-
-/** Готовые кучки рядом с героем сами идут в охапку, пока в ней есть место. */
-export function pickUp(g: Game): void {
+/**
+ * Грабли: сухое сено рядом с героем уходит в тюк, пока в нём есть место.
+ * Сырое остаётся лежать. Индексы начисто сгребённых кустиков попадают в rakeIdx.
+ */
+export function rake(g: Game): void {
   const h = g.hero;
   const cap = g.d.carryCap;
   if (h.load >= cap) return;
-  const r = g.tuning.pickupRadius;
+  const f = g.field;
+  const r = g.d.rakeRadius;
   const r2 = r * r;
-  const piles = g.piles;
-  let write = 0;
-  for (let i = 0; i < piles.length; i++) {
-    const p = piles[i]!;
-    let keep = true;
-    if (p.dry >= 1 && h.load < cap) {
-      const dx = p.x - h.x;
-      const dy = p.y - h.y;
-      if (dx * dx + dy * dy <= r2) {
+  const c0 = cellCoord(f.cols, h.x - r);
+  const c1 = cellCoord(f.cols, h.x + r);
+  const r0 = cellCoord(f.cols, h.y - r);
+  const r1 = cellCoord(f.cols, h.y + r);
+  for (let cy = r0; cy <= r1; cy++) {
+    for (let cx = c0; cx <= c1; cx++) {
+      const cell = cy * f.cols + cx;
+      const end = f.cellStart[cell + 1]!;
+      for (let k = f.cellStart[cell]!; k < end; k++) {
+        const i = f.cellItems[k]!;
+        const hay = f.hay[i]!;
+        if (hay <= 0) continue;
+        if (g.tick - f.cutTick[i]! < g.dryTicks) continue; // ещё сырое
+        const dx = f.x[i]! - h.x;
+        const dy = f.y[i]! - h.y;
+        if (dx * dx + dy * dy > r2) continue;
+
         const room = cap - h.load;
-        let kg: number;
-        if (p.mass <= room) {
-          kg = p.mass;
-          h.load += kg;
-          if (h.load > cap) h.load = cap;
-          keep = false;
+        if (hay <= room) {
+          h.load += hay;
+          g.rakedKg += hay;
+          f.hay[i] = 0;
+          if (g.rakeCount < g.rakeIdx.length) g.rakeIdx[g.rakeCount++] = i;
+          if (h.load >= cap) {
+            h.load = cap;
+            return;
+          }
         } else {
-          kg = room;
-          p.mass -= room;
+          // Тюк полон: с этого кустика взяли часть, остальное лежит дальше.
+          f.hay[i] = hay - room;
+          g.rakedKg += room;
           h.load = cap;
+          return;
         }
-        g.picks.push({ id: p.id, x: p.x, y: p.y, kg, removed: !keep });
       }
     }
-    if (keep) piles[write++] = p;
   }
-  piles.length = write;
 }
 
-/** У стога охапка выгружается сама. Возвращает, сколько кг выгружено за шаг. */
+/** У стога тюк выгружается сам. Возвращает, сколько кг выгружено за шаг. */
 export function unload(g: Game): number {
   const h = g.hero;
   if (h.load <= 0) return 0;
@@ -155,9 +87,20 @@ export function unload(g: Game): number {
   return kg;
 }
 
-/** Сколько сена лежит на поле. */
+/** Сколько сена лежит на поле (и сырого, и сухого). */
 export function groundKg(g: Game): number {
+  const hay = g.field.hay;
   let kg = 0;
-  for (let i = 0; i < g.piles.length; i++) kg += g.piles[i]!.mass;
+  for (let i = 0; i < hay.length; i++) kg += hay[i]!;
+  return kg;
+}
+
+/** Сколько на поле сухого сена, готового к граблям. */
+export function dryKg(g: Game): number {
+  const f = g.field;
+  let kg = 0;
+  for (let i = 0; i < f.count; i++) {
+    if (f.hay[i]! > 0 && g.tick - f.cutTick[i]! >= g.dryTicks) kg += f.hay[i]!;
+  }
   return kg;
 }

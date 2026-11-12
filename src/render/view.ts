@@ -3,11 +3,11 @@
 import * as THREE from 'three';
 import { DIR_STEP_DEG, DIR_X, DIR_Y } from '../sim/dirs.ts';
 import type { Game } from '../sim/game.ts';
+import { DT } from '../sim/tuning.ts';
 import { IsoCamera } from './camera.ts';
 import { CutBits } from './fx.ts';
 import { Grass } from './grass.ts';
 import { Ground } from './ground.ts';
-import { PilesView } from './hay.ts';
 import { HeroView } from './hero.ts';
 import type { Look } from './look.ts';
 import { buildRocks, buildStack, buildTrees } from './props.ts';
@@ -25,8 +25,7 @@ export const QUALITY_LOW: Quality = { fewerBlades: 2, maxPixelRatio: 1.5, bits: 
 /** Что случилось за шаг — для звука и вибрации. */
 export interface StepFx {
   swingCut: number; // срезано кустиков (0 — взмаха не было)
-  ready: number; // сколько кучек высохло
-  picked: number; // сколько кг подобрано
+  raked: number; // сколько кг сгребли в тюк
   unloaded: number; // сколько кг ушло в стог
   leveled: boolean; // пора выбирать перк
 }
@@ -39,8 +38,7 @@ export class View {
   private readonly scene = new THREE.Scene();
   private readonly ground: Ground;
   private readonly grass: Grass;
-  private readonly piles: PilesView;
-  private readonly hero = new HeroView();
+  private readonly hero: HeroView;
   private readonly stack: THREE.Group;
   private readonly bits: CutBits;
   private readonly quality: Quality;
@@ -80,11 +78,8 @@ export class View {
     }
     this.scene.add(this.ground.mesh);
 
-    this.grass = new Grass(field, look, Math.max(3, look.blades - quality.fewerBlades));
+    this.grass = new Grass(field, look, Math.max(3, look.blades - quality.fewerBlades), game.tuning.dryTime);
     this.scene.add(this.grass.group);
-
-    this.piles = new PilesView(look);
-    this.scene.add(this.piles.mesh);
 
     this.stack = buildStack(game.stackX, game.stackY);
     this.scene.add(this.stack);
@@ -94,6 +89,7 @@ export class View {
     this.bits = new CutBits(quality.bits);
     this.scene.add(this.bits.mesh);
 
+    this.hero = new HeroView(look.hayReady);
     this.scene.add(this.hero.group);
     this.scene.add(this.hero.swoosh);
 
@@ -110,57 +106,55 @@ export class View {
 
   /** Вызывается после каждого шага симуляции: переносит события шага в картинку. */
   onStep(game: Game): StepFx {
-    const fx: StepFx = { swingCut: 0, ready: 0, picked: 0, unloaded: game.unloadedKg, leveled: game.leveled };
+    const fx: StepFx = { swingCut: 0, raked: game.rakedKg, unloaded: game.unloadedKg, leveled: game.leveled };
     const h = game.hero;
+    const field = game.field;
+    const gameTime = game.tick * DT;
 
     const swing = game.swing;
     if (swing) {
       fx.swingCut = swing.cut;
       const dirX = DIR_X[swing.dir]!;
       const dirZ = DIR_Y[swing.dir]!;
-      this.hero.swingAt(swing.x, swing.y, (swing.dir * DIR_STEP_DEG * Math.PI) / 180, swing.reach, swing.arcDeg);
+      const facing = (swing.dir * DIR_STEP_DEG * Math.PI) / 180;
+      this.hero.swingAt(swing.x, swing.y, facing, swing.reach, swing.arcDeg);
       this.shake = Math.min(1, 0.35 + swing.cut * 0.02);
 
-      const field = game.field;
       // Клочки летят не из каждого кустика — иначе на широкой косе их слишком много.
       const every = Math.max(1, Math.ceil(game.cutCount / 28));
       for (let k = 0; k < game.cutCount; k++) {
         const i = game.cutIdx[k]!;
         const x = field.x[i]!;
         const z = field.y[i]!;
-        // Срез идёт волной справа налево, как движется лезвие.
+        // Срез идёт волной справа налево, как движется лезвие; трава ложится влево от косаря.
         const side = (x - swing.x) * -dirZ + (z - swing.y) * dirX;
         const delay = 0.02 + 0.09 * (0.5 - Math.max(-0.5, Math.min(0.5, side / (swing.reach * 2))));
-        this.grass.cut(i, this.time + delay);
+        const layAngle = facing - Math.PI / 2 + (Math.random() - 0.5) * 0.9;
+        this.grass.cut(i, this.time + delay, gameTime, layAngle);
         this.ground.stampMown(x, z);
         if (k % every === 0) this.bits.spawn(x, z, dirX, dirZ, 2);
       }
     }
 
-    // Новые кучки «выпрыгивают» с задержкой, когда трава уже легла.
-    for (const id of game.newPileIds) this.piles.born(id, this.time + 0.12);
+    // Тюк едет за спиной героя: туда летит сено из-под граблей, оттуда — в стог.
+    const baleX = h.x - DIR_X[h.dir]! * 1.4;
+    const baleZ = h.y - DIR_Y[h.dir]! * 1.4;
 
-    // Высохшие — искры и звон.
-    if (game.readyIds.length > 0) {
-      fx.ready = game.readyIds.length;
-      for (const id of game.readyIds) {
-        const p = game.piles.find((q) => q.id === id);
-        if (p) this.bits.sparkle(p.x, p.y, this.look.pileReady);
+    if (game.rakeCount > 0) {
+      const every = Math.max(1, Math.ceil(game.rakeCount / 6));
+      for (let k = 0; k < game.rakeCount; k++) {
+        const i = game.rakeIdx[k]!;
+        this.grass.rake(i, this.time);
+        if (k % every === 0) {
+          this.bits.spawnToward(field.x[i]!, 0.15, field.y[i]!, baleX, 0.5, baleZ, 1, this.look.hayReady);
+        }
       }
     }
 
-    // Подобранное летит в охапку.
-    for (const pick of game.picks) {
-      fx.picked += pick.kg;
-      if (pick.removed) this.piles.forget(pick.id);
-      this.bits.spawnToward(pick.x, 0.3, pick.y, h.x, 1.1, h.y, 4, this.look.pileReady);
-    }
-
-    // Выгрузка: сено летит из охапки в стог.
     if (game.unloadedKg > 0) {
       this.stackBounce = 1;
       if (game.tick % 2 === 0) {
-        this.bits.spawnToward(h.x, 1.2, h.y, game.stackX, 2.3, game.stackY, 2, this.look.pileReady);
+        this.bits.spawnToward(baleX, 0.5, baleZ, game.stackX, 2.3, game.stackY, 2, this.look.hayReady);
       }
     }
     return fx;
@@ -174,10 +168,10 @@ export class View {
     const z = h.py + (h.y - h.py) * alpha;
     const dirAngle = (h.dir * DIR_STEP_DEG * Math.PI) / 180;
 
-    this.hero.setLoad(h.load / game.d.carryCap, h.load >= game.d.carryCap);
+    this.hero.setLoad(h.load, h.load >= game.d.carryCap);
+    this.hero.setRakeRadius(game.d.rakeRadius);
     this.hero.update(x, z, dirAngle, h.speed, dt);
-    this.grass.update(this.time, x, z);
-    this.piles.update(game, this.time);
+    this.grass.update(this.time, game.tick * DT, x, z);
     this.bits.update(dt);
     this.ground.flush();
     this.updateStack(game, dt);
@@ -239,7 +233,6 @@ export class View {
   dispose(): void {
     this.ground.dispose();
     this.grass.dispose();
-    this.piles.dispose();
     this.hero.dispose();
     this.bits.dispose();
     this.renderer.dispose();

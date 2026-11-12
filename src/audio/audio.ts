@@ -1,8 +1,7 @@
 // Звук. Браузеры разрешают его только после касания, поэтому unlock() вызывается
 // из нажатия на кнопку «Играть».
 //
-// Записи: взмах косы и грабли (подбор сена). Синтез: звон «готово», выгрузка в стог,
-// новый уровень — им не нужны файлы.
+// Записи: взмах косы и грабли. Синтез: выгрузка в стог и новое улучшение — им не нужны файлы.
 
 type AudioContextCtor = typeof AudioContext;
 
@@ -16,8 +15,6 @@ export class Sound {
   private rakes: AudioBuffer[] = [];
   private lastSwing = -1;
   private lastRake = -1;
-  private lastChimeAt = 0;
-  private chimeStep = 0;
   private lastRakeAt = 0;
   private lastThumpAt = 0;
 
@@ -82,25 +79,12 @@ export class Sound {
     this.lastSwing = this.play(this.swings, this.lastSwing, volume, 0.16);
   }
 
-  /** Сено подобрано в охапку. */
-  pickup(): void {
+  /** Грабли сгребают сено. */
+  rake(): void {
     const now = performance.now();
-    if (now - this.lastRakeAt < 180) return;
+    if (now - this.lastRakeAt < 330) return;
     this.lastRakeAt = now;
-    this.lastRake = this.play(this.rakes, this.lastRake, 0.55, 0.2);
-  }
-
-  /** Кучка высохла: короткий звон. Несколько подряд идут ступенями вверх. */
-  chime(): void {
-    const ctx = this.running();
-    if (!ctx) return;
-    const now = performance.now();
-    if (now - this.lastChimeAt < 90) return;
-    this.chimeStep = now - this.lastChimeAt < 900 ? (this.chimeStep + 1) % 5 : 0;
-    this.lastChimeAt = now;
-    const notes = [1318.5, 1480, 1661.2, 1760, 1975.5]; // ми, фа-диез, соль-диез, ля, си
-    this.tone(notes[this.chimeStep]!, 0.0, 0.32, 0.12, 'sine');
-    this.tone(notes[this.chimeStep]! * 2, 0.0, 0.18, 0.04, 'sine');
+    this.lastRake = this.play(this.rakes, this.lastRake, 0.45, 0.2);
   }
 
   /** Сено ушло в стог: мягкий глухой удар. */
@@ -108,7 +92,7 @@ export class Sound {
     const ctx = this.running();
     if (!ctx) return;
     const now = performance.now();
-    if (now - this.lastThumpAt < 160) return;
+    if (now - this.lastThumpAt < 320) return;
     this.lastThumpAt = now;
     const t = ctx.currentTime;
     const osc = ctx.createOscillator();
@@ -117,7 +101,7 @@ export class Sound {
     osc.frequency.setValueAtTime(150, t);
     osc.frequency.exponentialRampToValueAtTime(60, t + 0.14);
     gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.35, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.22, t + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
     osc.connect(gain);
     gain.connect(this.master!);
@@ -125,11 +109,11 @@ export class Sound {
     osc.stop(t + 0.2);
   }
 
-  /** Новый уровень: короткое восходящее арпеджио. */
+  /** Новое улучшение: два мягких тона вверх (один раз, когда появляются карточки). */
   levelUp(): void {
     if (!this.running()) return;
-    const notes = [523.3, 659.3, 784, 1046.5]; // до, ми, соль, до
-    notes.forEach((f, i) => this.tone(f, i * 0.07, 0.28, 0.16, 'triangle'));
+    this.tone(523.3, 0, 0.3, 0.1, 'triangle'); // до
+    this.tone(784, 0.11, 0.42, 0.1, 'triangle'); // соль
   }
 
   private tone(freq: number, delay: number, length: number, volume: number, type: OscillatorType): void {

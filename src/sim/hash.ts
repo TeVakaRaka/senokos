@@ -38,19 +38,16 @@ export function hashGame(g: Game): number {
   h = mixNumber(h, g.level);
   for (let i = 0; i < g.perks.length; i++) h = mixNumber(h, g.perks[i]!);
   if (g.offer) for (let i = 0; i < g.offer.length; i++) h = mixNumber(h, 100 + g.offer[i]!);
-  h = mixNumber(h, g.nextPileId);
-  h = mixNumber(h, g.piles.length);
-  for (let i = 0; i < g.piles.length; i++) {
-    const p = g.piles[i]!;
-    h = mixNumber(h, p.id);
-    h = mixNumber(h, p.x);
-    h = mixNumber(h, p.y);
-    h = mixNumber(h, p.mass);
-    h = mixNumber(h, p.dry);
+  const f = g.field;
+  h = mixNumber(h, f.standing);
+  for (let i = 0; i < f.count; i++) {
+    h = mixByte(h, f.hp[i]!);
+    // Лежащее сено и момент покоса — только у скошенных кустиков.
+    if (f.hp[i] === 0) {
+      h = mixNumber(h, f.hay[i]!);
+      h = mixNumber(h, f.cutTick[i]!);
+    }
   }
-  h = mixNumber(h, g.field.standing);
-  const hp = g.field.hp;
-  for (let i = 0; i < hp.length; i++) h = mixByte(h, hp[i]!);
   return h >>> 0;
 }
 

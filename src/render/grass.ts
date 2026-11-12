@@ -1,9 +1,14 @@
 // Трава: каждый кустик — копия одной маленькой модели (инстансинг). Поле разбито на
-// участки 6×6, чтобы видеокарта не рисовала то, что за экраном. Качание от ветра,
-// отклонение от героя и срез в стерню считаются в шейдере.
+// участки 6×6, чтобы видеокарта не рисовала то, что за экраном.
+//
+// У кустика три вида, и все считаются в шейдере:
+//   стоит    — качается от ветра, раздвигается вокруг героя;
+//   лежит    — скошен: травинки легли в одну сторону и сохнут, цвет идёт от зелёного к золотому;
+//   сгребён  — грабли убрали сено, осталась короткая стерня.
 
 import * as THREE from 'three';
 import type { Field } from '../sim/field.ts';
+import { DT } from '../sim/tuning.ts';
 import type { Look } from './look.ts';
 
 const CHUNKS = 6;
@@ -11,48 +16,70 @@ const CHUNKS = 6;
 const VERT = /* glsl */ `
 attribute vec2 iOffset;   // положение кустика на поле
 attribute vec3 iParams;   // поворот, размер, оттенок
-attribute float iCut;     // когда срезан (в секундах картинки); −1 — стоит
+// Состояние: когда срезан (часы картинки; −1 — стоит), когда срезан (игровое время, с),
+// когда сгребён (часы картинки; −1 — ещё лежит), в какую сторону лёг (угол).
+attribute vec4 iState;
 attribute float aH;       // высота точки на травинке: 0 у земли, 1 на кончике
 
-uniform float uTime;
+uniform float uTime;      // часы картинки, с
+uniform float uGameTime;  // игровое время, с (стоит, пока игрок выбирает перк)
+uniform float uDryTime;   // сколько сохнет скошенное, с
 uniform vec2 uHero;
 uniform vec2 uWind;
 
 varying float vH;
 varying float vTint;
-varying float vCut;
+varying float vLaid;
+varying float vRaked;
+varying float vDry;
+varying float vPulse;
 
 void main() {
-  float cutT = iCut < -0.5 ? 0.0 : clamp((uTime - iCut) / 0.16, 0.0, 1.0);
-
-  vec3 p = position;
-  p.xz *= iParams.y * mix(1.0, 0.8, cutT);
-  p.y *= iParams.y * mix(1.0, 0.15, cutT);   // стерня — низкая
+  float isCut = step(-0.5, iState.x);
+  float cutT = isCut * clamp((uTime - iState.x) / 0.2, 0.0, 1.0);
+  float rakeT = step(-0.5, iState.z) * clamp((uTime - iState.z) / 0.16, 0.0, 1.0);
+  float dry = isCut * clamp((uGameTime - iState.y) / uDryTime, 0.0, 1.0);
 
   float c = cos(iParams.x);
   float s = sin(iParams.x);
-  p.xz = vec2(c * p.x - s * p.z, s * p.x + c * p.z);
+  vec3 q = position * iParams.y;
+  vec2 rxz = vec2(c * q.x - s * q.z, s * q.x + c * q.z);
 
-  float bend = aH * aH * (1.0 - cutT);
-
-  // Ветер: две волны с разной частотой, фаза зависит от места на поле.
+  // Стоит: ветер (две волны, фаза по месту на поле) и герой, раздвигающий траву.
+  float bend = aH * aH;
   float phase = iOffset.x * 0.9 + iOffset.y * 0.7;
   float sway = sin(uTime * 1.8 + phase) * 0.06 + sin(uTime * 3.3 + phase * 2.1) * 0.025;
-  p.xz += uWind * sway * bend;
-
-  // Герой раздвигает траву вокруг себя.
   vec2 away = iOffset - uHero;
   float dist = length(away);
   float push = (1.0 - smoothstep(0.25, 1.15, dist)) * 0.32 * bend;
-  p.xz += (away / max(dist, 0.001)) * push;
-  p.y -= push * 0.35;
+  vec3 stand = vec3(rxz.x, q.y, rxz.y);
+  stand.xz += uWind * sway * bend + (away / max(dist, 0.001)) * push;
+  stand.y -= push * 0.35;
+
+  // Лежит: травинки легли в одну сторону. У каждого кустика своя высота над землёй,
+  // иначе плоские травинки мерцают друг сквозь друга.
+  vec2 d = vec2(cos(iState.w), sin(iState.w));
+  float lift = 0.03 + 0.07 * fract(iParams.z * 7.31) + 0.06 * aH;
+  vec3 laid = vec3(rxz.x * 0.55 + d.x * q.y, lift, rxz.y * 0.55 + d.y * q.y);
+
+  // Сгребён: короткая стерня.
+  vec3 stub = vec3(rxz.x * 0.8, q.y * 0.15, rxz.y * 0.8);
+
+  float lay = cutT * cutT * (3.0 - 2.0 * cutT);
+  vec3 p = mix(stand, laid, lay);
+  p = mix(p, stub, rakeT);
+  // Сено под граблями чуть подлетает.
+  p.y += sin(rakeT * 3.14159) * 0.22 * aH;
 
   vec3 world = vec3(iOffset.x + p.x, p.y, iOffset.y + p.z);
   gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
 
   vH = aH;
   vTint = iParams.z;
-  vCut = cutT;
+  vLaid = lay;
+  vRaked = rakeT;
+  vDry = dry;
+  vPulse = sin(uTime * 2.6 + phase * 1.3);
 }
 `;
 
@@ -61,15 +88,28 @@ uniform vec3 uBase;
 uniform vec3 uTipA;
 uniform vec3 uTipB;
 uniform vec3 uStubble;
+uniform vec3 uHayWet;
+uniform vec3 uHayDrying;
+uniform vec3 uHayReady;
 
 varying float vH;
 varying float vTint;
-varying float vCut;
+varying float vLaid;
+varying float vRaked;
+varying float vDry;
+varying float vPulse;
 
 void main() {
-  vec3 tip = mix(uTipA, uTipB, vTint);
-  vec3 col = mix(uBase, tip, vH);
-  col = mix(col, uStubble, vCut);
+  vec3 standing = mix(uBase, mix(uTipA, uTipB, vTint), vH);
+
+  // Сохнет: зелёное → бледно-жёлтое. Высохло — золотое и чуть переливается.
+  vec3 hay = mix(uHayWet, uHayDrying, vDry);
+  float ready = smoothstep(0.96, 1.0, vDry);
+  hay = mix(hay, uHayReady * (1.0 + 0.07 * vPulse), ready);
+  hay *= (0.84 + 0.16 * vH) * (0.92 + 0.16 * vTint);
+
+  vec3 col = mix(standing, hay, vLaid);
+  col = mix(col, uStubble, vRaked);
   gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
 }
@@ -135,23 +175,28 @@ function buildTuftGeometry(
 export class Grass {
   readonly group = new THREE.Group();
   private readonly material: THREE.ShaderMaterial;
-  private readonly cutAttrs: THREE.InstancedBufferAttribute[] = [];
+  private readonly stateAttrs: THREE.InstancedBufferAttribute[] = [];
   private readonly tuftChunk: Uint16Array;
   private readonly tuftSlot: Uint16Array;
 
-  constructor(field: Field, look: Look, bladesPerTuft: number) {
+  constructor(field: Field, look: Look, bladesPerTuft: number, dryTime: number) {
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
       side: THREE.DoubleSide,
       uniforms: {
         uTime: { value: 0 },
+        uGameTime: { value: 0 },
+        uDryTime: { value: dryTime },
         uHero: { value: new THREE.Vector2() },
         uWind: { value: new THREE.Vector2(0.8, 0.6) },
         uBase: { value: new THREE.Color(look.grassBase) },
         uTipA: { value: new THREE.Color(look.grassTipA) },
         uTipB: { value: new THREE.Color(look.grassTipB) },
         uStubble: { value: new THREE.Color(look.stubble) },
+        uHayWet: { value: new THREE.Color(look.hayWet) },
+        uHayDrying: { value: new THREE.Color(look.hayDrying) },
+        uHayReady: { value: new THREE.Color(look.hayReady) },
       },
     });
 
@@ -177,11 +222,11 @@ export class Grass {
 
     const offsets: Float32Array[] = [];
     const params: Float32Array[] = [];
-    const cuts: Float32Array[] = [];
+    const states: Float32Array[] = [];
     for (let c = 0; c < chunkCount; c++) {
       offsets.push(new Float32Array(counts[c]! * 2));
       params.push(new Float32Array(counts[c]! * 3));
-      cuts.push(new Float32Array(counts[c]!).fill(-1));
+      states.push(new Float32Array(counts[c]! * 4));
     }
 
     const rnd = lcg(987654321);
@@ -193,7 +238,16 @@ export class Grass {
       params[c]![slot * 3] = rnd() * Math.PI * 2; // поворот
       params[c]![slot * 3 + 1] = 0.85 + rnd() * 0.4; // размер
       params[c]![slot * 3 + 2] = rnd(); // оттенок
-      if (field.hp[i] === 0) cuts[c]![slot] = 0; // уже скошен на момент создания картинки
+
+      const state = states[c]!;
+      const layAngle = rnd() * Math.PI * 2;
+      if (field.hp[i] !== 0) {
+        state.set([-1, 0, -1, layAngle], slot * 4); // стоит
+      } else if (field.hay[i]! > 0) {
+        state.set([0, field.cutTick[i]! * DT, -1, layAngle], slot * 4); // уже лежит (вчерашний покос)
+      } else {
+        state.set([0, 0, 0, layAngle], slot * 4); // уже сгребён
+      }
     }
 
     for (let c = 0; c < chunkCount; c++) {
@@ -203,18 +257,18 @@ export class Grass {
       geometry.setAttribute('aH', baseHeight);
       geometry.setAttribute('iOffset', new THREE.InstancedBufferAttribute(offsets[c]!, 2));
       geometry.setAttribute('iParams', new THREE.InstancedBufferAttribute(params[c]!, 3));
-      const cutAttr = new THREE.InstancedBufferAttribute(cuts[c]!, 1);
-      cutAttr.setUsage(THREE.DynamicDrawUsage);
-      geometry.setAttribute('iCut', cutAttr);
+      const stateAttr = new THREE.InstancedBufferAttribute(states[c]!, 4);
+      stateAttr.setUsage(THREE.DynamicDrawUsage);
+      geometry.setAttribute('iState', stateAttr);
       geometry.instanceCount = counts[c]!;
-      this.cutAttrs.push(cutAttr);
+      this.stateAttrs.push(stateAttr);
 
       // Свой ограничивающий шар: по нему участок отсекается, когда он за экраном.
       const cx = (c % CHUNKS) + 0.5;
       const cy = Math.floor(c / CHUNKS) + 0.5;
       geometry.boundingSphere = new THREE.Sphere(
         new THREE.Vector3(cx * chunkSize, 0.4, cy * chunkSize),
-        chunkSize * Math.SQRT1_2 + 1.2,
+        chunkSize * Math.SQRT1_2 + 1.6,
       );
 
       const mesh = new THREE.Mesh(geometry, this.material);
@@ -223,16 +277,32 @@ export class Grass {
     }
   }
 
-  /** Срезать кустик: с этого момента он за 0,16 с оседает в стерню. */
-  cut(tuftIndex: number, time: number): void {
-    const attr = this.cutAttrs[this.tuftChunk[tuftIndex]!]!;
-    (attr.array as Float32Array)[this.tuftSlot[tuftIndex]!] = time;
+  /**
+   * Срезать кустик: за 0,2 с он ложится на землю и начинает сохнуть.
+   * time — часы картинки, gameTime — игровое время покоса, layAngle — куда лечь.
+   */
+  cut(tuftIndex: number, time: number, gameTime: number, layAngle: number): void {
+    const attr = this.stateAttrs[this.tuftChunk[tuftIndex]!]!;
+    const state = attr.array as Float32Array;
+    const o = this.tuftSlot[tuftIndex]! * 4;
+    state[o] = time;
+    state[o + 1] = gameTime;
+    state[o + 2] = -1;
+    state[o + 3] = layAngle;
     attr.needsUpdate = true;
   }
 
-  update(time: number, heroX: number, heroZ: number): void {
+  /** Сгрести сено с кустика: остаётся стерня. */
+  rake(tuftIndex: number, time: number): void {
+    const attr = this.stateAttrs[this.tuftChunk[tuftIndex]!]!;
+    (attr.array as Float32Array)[this.tuftSlot[tuftIndex]! * 4 + 2] = time;
+    attr.needsUpdate = true;
+  }
+
+  update(time: number, gameTime: number, heroX: number, heroZ: number): void {
     const u = this.material.uniforms;
     u.uTime!.value = time;
+    u.uGameTime!.value = gameTime;
     (u.uHero!.value as THREE.Vector2).set(heroX, heroZ);
   }
 

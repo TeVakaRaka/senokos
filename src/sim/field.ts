@@ -1,5 +1,8 @@
 // Поле: кустики травы в плоских массивах и сетка для быстрого поиска соседей.
 // Кустики не двигаются, поэтому сетка строится один раз.
+//
+// Жизнь кустика: стоит (hp > 0) → скошен и лежит на месте, сохнет (hp = 0, hay > 0) →
+// сгребён граблями (hp = 0, hay = 0).
 
 export const GRASS_MEADOW = 0; // луговая
 export const GRASS_COUCH = 1; // пырей
@@ -12,6 +15,8 @@ export interface Field {
   y: Float32Array;
   type: Uint8Array;
   hp: Uint8Array; // сколько ударов осталось; 0 — скошен
+  hay: Float64Array; // сколько сена лежит на месте кустика, кг (0 — стоит или сгребён)
+  cutTick: Int32Array; // шаг, на котором скошен (сохнет от этого момента)
   standing: number; // сколько ещё стоит
 
   // Сетка поиска: ячейка 1×1 м, кустики одной ячейки лежат подряд в cellItems.
@@ -33,6 +38,8 @@ export function buildField(
   const y = new Float32Array(count);
   const type = new Uint8Array(count);
   const hp = new Uint8Array(count);
+  const hay = new Float64Array(count);
+  const cutTick = new Int32Array(count);
   for (let i = 0; i < count; i++) {
     x[i] = xs[i]!;
     y[i] = ys[i]!;
@@ -56,7 +63,7 @@ export function buildField(
     cursor[c]!++;
   }
 
-  return { size, count, x, y, type, hp, standing: count, cols, cellStart, cellItems };
+  return { size, count, x, y, type, hp, hay, cutTick, standing: count, cols, cellStart, cellItems };
 }
 
 export function cellCoord(cols: number, v: number): number {
@@ -114,14 +121,23 @@ export function standingInRect(f: Field, x0: number, x1: number, y0: number, y1:
   return false;
 }
 
-/** Индекс ближайшего стоячего кустика или −1. Ищет кольцами ячеек от точки наружу. */
+/** Индекс ближайшего стоячего кустика или −1. */
 export function nearestStanding(f: Field, px: number, py: number): number {
   if (f.standing === 0) return -1;
+  return nearestTuft(f, px, py, Infinity, (i) => f.hp[i] !== 0);
+}
+
+/**
+ * Индекс ближайшего кустика, для которого accept(i) верно, не дальше maxDist; иначе −1.
+ * Ищет кольцами ячеек от точки наружу.
+ */
+export function nearestTuft(f: Field, px: number, py: number, maxDist: number, accept: (i: number) => boolean): number {
   const hx = cellCoord(f.cols, px);
   const hy = cellCoord(f.cols, py);
   let best = -1;
-  let bestD2 = Infinity;
-  for (let ring = 0; ring < f.cols; ring++) {
+  let bestD2 = maxDist === Infinity ? Infinity : maxDist * maxDist;
+  const maxRing = maxDist === Infinity ? f.cols : Math.min(f.cols, Math.ceil(maxDist) + 1);
+  for (let ring = 0; ring < maxRing; ring++) {
     // Кольцо на расстоянии ring ячеек не может дать кустик ближе (ring − 1) метров.
     if (best >= 0) {
       const lower = ring - 1;
@@ -141,7 +157,7 @@ export function nearestStanding(f: Field, px: number, py: number): number {
         const end = f.cellStart[cell + 1]!;
         for (let k = f.cellStart[cell]!; k < end; k++) {
           const i = f.cellItems[k]!;
-          if (f.hp[i] === 0) continue;
+          if (!accept(i)) continue;
           const dx = f.x[i]! - px;
           const dy = f.y[i]! - py;
           const d2 = dx * dx + dy * dy;

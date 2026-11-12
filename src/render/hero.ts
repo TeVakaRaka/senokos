@@ -17,19 +17,21 @@ export class HeroView {
   private readonly legL: THREE.Mesh;
   private readonly legR: THREE.Mesh;
   private readonly scythe = new THREE.Group();
-  private readonly bundle: THREE.Mesh;
+  private readonly rakeHead = new THREE.Group();
+  private readonly bale = new THREE.Group();
   private readonly swooshMaterial: THREE.ShaderMaterial;
-  private load = 0; // доля заполнения охапки 0…1
+  private load = 0; // кг в тюке
   private full = false;
   private shoulder = 0; // 0 — коса в руках, 1 — на плече (плавно)
 
   private facing = 0; // текущий угол модели, радианы (в координатах симуляции)
+  private firstFrame = true;
   private walk = 0; // фаза шага
   private swingAge = 10; // секунд с последнего взмаха
   private swingHalfArc = 0.96; // половина дуги последнего взмаха, радианы
   private swooshKey = '';
 
-  constructor() {
+  constructor(hayColor: number) {
     // Ноги
     const legGeo = new THREE.BoxGeometry(0.16, 0.5, 0.16);
     legGeo.translate(0, -0.25, 0);
@@ -74,13 +76,39 @@ export class HeroView {
     this.scythe.add(snath, blade);
     this.body.add(this.scythe);
 
-    // Охапка сена за спиной: растёт вместе с грузом.
-    this.bundle = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 1), lambert(0xe9b93c));
-    this.bundle.position.set(-0.32, 1.02, 0);
-    this.bundle.scale.set(0.8, 0.7, 1);
-    this.bundle.visible = false;
-    this.body.add(this.bundle);
     this.group.add(this.body);
+
+    // Грабли-волокуша: косарь тащит их за собой. Поперечина с зубьями (её ширина —
+    // ширина граблей в игре) на черенке; сгребённое сено собирается за ней в тюк.
+    const wood = lambert(0xb07f45);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.07, 1), wood);
+    bar.position.y = 0.21;
+    this.rakeHead.add(bar);
+    const toothGeo = new THREE.BoxGeometry(0.045, 0.2, 0.035);
+    for (let k = 0; k < 9; k++) {
+      const tooth = new THREE.Mesh(toothGeo, wood);
+      tooth.position.set(-0.03, 0.1, (k / 8 - 0.5) * 0.94);
+      tooth.rotation.z = -0.25;
+      this.rakeHead.add(tooth);
+    }
+    this.rakeHead.position.x = -0.78;
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.9, 5), wood);
+    handle.position.set(-0.47, 0.53, 0);
+    handle.rotation.z = -0.75;
+    this.group.add(this.rakeHead, handle);
+
+    // Тюк: растёт вместе с сеном в нём. Две обвязки — чтобы читался как тюк, а не куча.
+    const hay = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.7, 0.8), lambert(hayColor));
+    hay.position.y = 0.35;
+    const twineGeo = new THREE.BoxGeometry(0.06, 0.73, 0.83);
+    const twine = lambert(0x8a5a1c);
+    const twineA = new THREE.Mesh(twineGeo, twine);
+    twineA.position.set(-0.28, 0.35, 0);
+    const twineB = new THREE.Mesh(twineGeo, twine);
+    twineB.position.set(0.28, 0.35, 0);
+    this.bale.add(hay, twineA, twineB);
+    this.bale.visible = false;
+    this.group.add(this.bale);
 
     // Тень-пятно под героем
     const shadow = new THREE.Mesh(
@@ -145,16 +173,25 @@ export class HeroView {
     this.swoosh.visible = true;
   }
 
-  /** Сколько сена несёт герой: доля охапки 0…1 и полна ли она. */
-  setLoad(fraction: number, full: boolean): void {
-    this.load = fraction;
+  /** Сколько сена в тюке (кг) и полон ли он. */
+  setLoad(kg: number, full: boolean): void {
+    this.load = kg;
     this.full = full;
+  }
+
+  /** Ширина граблей (радиус сгребания в игре, м). */
+  setRakeRadius(radius: number): void {
+    this.rakeHead.scale.z = radius * 1.9;
   }
 
   update(x: number, z: number, dirAngle: number, speed: number, dt: number): void {
     this.group.position.set(x, 0, z);
 
-    // Плавный поворот к направлению движения по кратчайшей дуге.
+    // Плавный поворот к направлению движения по кратчайшей дуге (в первом кадре — сразу).
+    if (this.firstFrame) {
+      this.firstFrame = false;
+      this.facing = dirAngle;
+    }
     let diff = dirAngle - this.facing;
     diff = Math.atan2(Math.sin(diff), Math.cos(diff));
     this.facing += diff * (1 - Math.exp(-dt * 16));
@@ -191,12 +228,14 @@ export class HeroView {
       this.scythe.rotation.z = 0;
     }
 
-    // Охапка: появляется с первым сеном и растёт до полной.
-    this.bundle.visible = this.load > 0.01;
-    if (this.bundle.visible) {
-      const s = 0.45 + 0.75 * this.load;
-      this.bundle.scale.set(0.8 * s, 0.7 * s, s);
-      this.bundle.position.y = 1.0 + 0.12 * this.load;
+    // Тюк за граблями: появляется с первым сеном, объём растёт вместе с весом.
+    this.bale.visible = this.load > 0.05;
+    if (this.bale.visible) {
+      const s = Math.max(0.3, 0.36 * Math.cbrt(this.load));
+      this.bale.scale.setScalar(s);
+      this.bale.position.x = -0.95 - 0.58 * s;
+      // Полный тюк слегка подпрыгивает на ходу.
+      this.bale.position.y = moving ? Math.abs(Math.sin(this.walk * 0.5)) * 0.03 : 0;
     }
 
     // След
