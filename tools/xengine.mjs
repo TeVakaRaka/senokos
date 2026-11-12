@@ -31,7 +31,7 @@ if (!existsSync(JSC)) {
 
 const jsc = run(JSC);
 let mismatches = 0;
-console.log('зерно  V8        JSC       кустиков  взмахов');
+console.log('зерно  V8        JSC       в стогу  перков');
 for (let i = 0; i < Math.max(v8.length, jsc.length); i++) {
   const a = (v8[i] ?? '').split(' ');
   const b = (jsc[i] ?? '').split(' ');

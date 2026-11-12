@@ -9,19 +9,42 @@
 //   ?selftest=1   — проверка одинаковости расчётов на этом устройстве
 
 import './ui/ui.css';
+import { autoplay } from './sim/autoplay.ts';
 import { botInput, createBot } from './sim/bot.ts';
-import { createGame, step, type Game } from './sim/game.ts';
+import { createGame, step } from './sim/game.ts';
+import { groundKg } from './sim/hay.ts';
+import { CHOICE_BASE } from './sim/perks.ts';
 import { hashGame, hashTuning, hex8 } from './sim/hash.ts';
 import { Recorder } from './sim/replay.ts';
 import { cloneTuning, DEFAULT_TUNING, DT, type Tuning } from './sim/tuning.ts';
 import { Sound } from './audio/audio.ts';
 import { lookById, LOOKS } from './render/look.ts';
 import { QUALITY_HIGH, QUALITY_LOW, View } from './render/view.ts';
+import { Hud } from './ui/hud.ts';
 import { Joystick } from './ui/joystick.ts';
+import { PerkCards } from './ui/perkCards.ts';
+import { Results } from './ui/results.ts';
 import { Platform } from './platform/platform.ts';
 
 const params = new URLSearchParams(location.search);
 const TUNING_KEY = 'senokos.tuning';
+const BEST_KEY = 'senokos.best';
+
+function readBest(): number {
+  try {
+    return Number(localStorage.getItem(BEST_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeBest(kg: number): void {
+  try {
+    localStorage.setItem(BEST_KEY, String(kg));
+  } catch {
+    // хранилище недоступно — рекорд просто не запомнится
+  }
+}
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -76,9 +99,10 @@ function startGame(): void {
   const overlay = $('overlay');
   const overlayText = $('overlay-text');
   const overlayButton = $('overlay-button');
-  const hudMown = $('hud-mown');
-  const hudTime = $('hud-time');
   const debugLine = $('debug-line');
+  const hud = new Hud();
+  const cards = new PerkCards();
+  const results = new Results();
 
   let started = autopilot;
   let lostContext = false;
@@ -132,27 +156,59 @@ function startGame(): void {
   let last = performance.now();
   let acc = 0;
   let fps = 60;
-  let hudTimer = 0;
+  let debugTimer = 0;
   let frozen = false; // отладочная пауза: кадры идут только по команде advance()
 
-  /** Один шаг симуляции вместе с событиями для картинки и вибрацией. */
-  function tick(): void {
-    const input = autopilot ? botInput(game, bot) : playerInput();
+  /** Один шаг симуляции (или выбор перка) вместе с эффектами, звуком и вибрацией. */
+  function apply(input: number): void {
     recorder.push(input);
     step(game, input);
-    const swing = view.onStep(game);
-    if (swing && swing.cut > 0) {
-      sound.swing(swing.cut / 25);
+    const fx = view.onStep(game);
+    if (fx.swingCut > 0) {
+      sound.swing(fx.swingCut / 25);
       platform.haptic();
     }
+    if (fx.ready > 0) sound.chime();
+    if (fx.picked > 0) sound.pickup();
+    if (fx.unloaded > 0) sound.thump();
   }
 
-  function updateHud(): void {
-    const share = Math.round((game.cutTufts / Math.max(1, game.field.count)) * 100);
-    hudMown.innerHTML = `Скошено ${share} % <small>· ${Math.round(game.cutKg)} кг</small>`;
-    const seconds = Math.floor(game.tick * DT);
-    hudTime.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-    debugLine.textContent = `${Math.round(fps)} к/с · ${Math.round(view.triangles / 1000)} тыс. треуг. · ${view.qualityName} · ${look.title}`;
+  function tick(): void {
+    apply(autopilot ? botInput(game, bot) : playerInput());
+  }
+
+  /** Игра ждёт: выбор перка или конец дня. Показать нужный экран. */
+  function handleWaiting(): void {
+    if (game.offer !== null) {
+      if (autopilot) {
+        apply(botInput(game, bot)); // бот выбирает сам
+        return;
+      }
+      if (!cards.visible) {
+        sound.levelUp();
+        cards.show(game.offer, game.perks, game.tuning.perkMaxLevel, game.tuning, (index) => {
+          apply(CHOICE_BASE + index);
+          last = performance.now();
+        });
+      }
+      return;
+    }
+    if (game.over && !results.visible) {
+      const best = readBest();
+      const kg = Math.floor(game.stacked);
+      if (kg > best) writeBest(kg);
+      platform.setPlaying(false);
+      results.show(
+        {
+          stacked: game.stacked,
+          mownShare: game.cutTufts / Math.max(1, game.field.count),
+          groundKg: groundKg(game) + game.hero.load,
+          perks: game.level,
+          best,
+        },
+        () => location.reload(),
+      );
+    }
   }
 
   function frame(now: number): void {
@@ -163,21 +219,28 @@ function startGame(): void {
     if (dt <= 0 || frozen) return;
     fps += (1 / dt - fps) * 0.05;
 
-    const running = started && !document.hidden && !lostContext && platform.active;
+    const waiting = game.offer !== null || game.over;
+    const running = started && !document.hidden && !lostContext && platform.active && !waiting;
     if (running) {
       acc += dt;
       while (acc >= DT) {
         tick();
         acc -= DT;
+        if (game.offer !== null || game.over) {
+          acc = 0;
+          break;
+        }
       }
     }
+    if (started && (game.offer !== null || game.over)) handleWaiting();
 
     if (!lostContext) view.render(game, running ? acc / DT : 1, dt);
+    hud.update(game, view);
 
-    hudTimer += dt;
-    if (hudTimer > 0.2) {
-      hudTimer = 0;
-      updateHud();
+    debugTimer += dt;
+    if (debugTimer > 0.5) {
+      debugTimer = 0;
+      debugLine.textContent = `${Math.round(fps)} к/с · ${Math.round(view.triangles / 1000)} тыс. треуг. · ${view.qualityName} · ${look.title}`;
     }
   }
   requestAnimationFrame(frame);
@@ -195,27 +258,38 @@ function startGame(): void {
         frozen = on;
         last = performance.now();
       },
-      /** Прокрутить игру на заданное число шагов, рисуя каждый. Работает на паузе. */
+      /**
+       * Прокрутить игру на заданное число шагов, рисуя каждый. Работает на паузе.
+       * В режиме бота перки выбираются сами; иначе прокрутка встаёт на выборе перка.
+       */
       advance: (ticks: number) => {
-        for (let i = 0; i < ticks; i++) {
+        for (let i = 0; i < ticks && !game.over; i++) {
+          if (game.offer !== null) {
+            if (!autopilot) break;
+            apply(botInput(game, bot));
+          }
           tick();
           view.render(game, 1, DT);
         }
-        updateHud();
+        hud.update(game, view);
       },
       /** Прокрутить до ближайшего взмаха и ещё на несколько шагов после него. */
       advanceToSwing: (after: number) => {
-        for (let i = 0; i < 600; i++) {
+        for (let i = 0; i < 600 && !game.over; i++) {
+          if (game.offer !== null) apply(botInput(game, bot));
           tick();
           view.render(game, 1, DT);
           if (game.swing) break;
         }
-        for (let i = 0; i < after; i++) {
+        for (let i = 0; i < after && !game.over; i++) {
+          if (game.offer !== null) apply(botInput(game, bot));
           tick();
           view.render(game, 1, DT);
         }
-        updateHud();
+        hud.update(game, view);
       },
+      /** Показать экран ожидания (перк или итоги), если он нужен. */
+      showWaiting: () => handleWaiting(),
     },
   });
 }
@@ -234,6 +308,11 @@ async function openDebugPanel(current: Tuning): Promise<void> {
   gui.add(draft, 'fieldSize', 16, 64, 4).name('поле, м');
   gui.add(draft, 'coverage', 0.3, 1.5, 0.05).name('доля травы');
   gui.add(draft, 'grassTypes', 1, 2, 1).name('видов травы');
+  gui.add(draft, 'dayLength', 30, 300, 10).name('длина дня, с');
+  gui.add(draft, 'dryTime', 4, 40, 1).name('сушка, с');
+  gui.add(draft, 'carryCap', 4, 40, 1).name('охапка, кг');
+  gui.add(draft, 'carrySlow', 0, 0.8, 0.05).name('груз тормозит, доля');
+  gui.add(draft, 'pickupRadius', 0.5, 3, 0.1).name('подбор, м');
   gui.add(
     {
       restart: () => {
@@ -263,7 +342,7 @@ interface SelftestRef {
 
 /** Проигрывает контрольные забеги бота и сравнивает хеши с посчитанными на Маке. */
 async function runSelftest(): Promise<void> {
-  for (const id of ['game', 'touch', 'stick-base', 'stick-knob', 'hud', 'debug-line', 'overlay']) {
+  for (const id of ['game', 'touch', 'stick-base', 'stick-knob', 'hud', 'debug-line', 'overlay', 'carry', 'stack-arrow']) {
     $(id).style.display = 'none';
   }
   const box = document.createElement('div');
@@ -284,10 +363,7 @@ async function runSelftest(): Promise<void> {
   let allOk = hex8(hashTuning(DEFAULT_TUNING)) === ref.tuning;
   const started = performance.now();
   for (const run of ref.runs) {
-    const g: Game = createGame(run.seed);
-    const bot = createBot(run.seed);
-    for (let i = 0; i < ref.ticks; i++) step(g, botInput(g, bot));
-    const got = hex8(hashGame(g));
+    const got = hex8(hashGame(autoplay(run.seed, ref.ticks).game));
     const ok = got === run.hash;
     if (!ok) allOk = false;
     rows.push(

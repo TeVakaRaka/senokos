@@ -1,10 +1,16 @@
 // Все числа баланса в одном месте. Набор замораживается на старте забега:
 // ползунки отладочной панели действуют только со следующего.
+//
+// Новое число обязательно добавить в tuningValues() — иначе оно не попадёт в хеш записи
+// и забег с другим набором чисел не отличить.
 
 export const TICK_RATE = 30; // шагов симуляции в секунду
 export const DT = 1 / TICK_RATE;
 
 export interface Tuning {
+  // День
+  dayLength: number; // секунд в одном дне
+
   // Поле
   fieldSize: number; // сторона квадратного поля, м
   tuftSpacing: number; // шаг сетки кустиков, м
@@ -32,9 +38,30 @@ export interface Tuning {
   // Трава: по видам (луговая, пырей, осока)
   grassHp: [number, number, number];
   grassYield: [number, number, number]; // кг сена с кустика
+
+  // Сено
+  pileBack: number; // на сколько метров за спиной героя ложится кучка
+  dryTime: number; // секунд на солнце, пока кучка станет готовой
+  pickupRadius: number; // готовые кучки ближе этого подбираются сами, м
+  carryCap: number; // вместимость охапки, кг
+  carrySlow: number; // какую долю скорости отнимает полная охапка
+  stackReach: number; // ближе этого расстояния от центра стога охапка выгружается, м
+  unloadRate: number; // кг в секунду при выгрузке
+  yesterdayKg: number; // готовое «вчерашнее» сено у стога с утра, кг
+  yesterdayPiles: number; // на сколько кучек оно разложено
+
+  // Перки
+  perkMaxLevel: number;
+  arcPerLevel: number; // градусов дуги за уровень
+  reachPerLevel: number; // метров радиуса за уровень
+  ratePerLevel: number; // на какую долю короче период взмаха за уровень
+  carryPerLevel: number; // кг охапки за уровень
+  levelKg: number[]; // пороги выгруженного сена для новых перков, кг
 }
 
 export const DEFAULT_TUNING: Tuning = {
+  dayLength: 180,
+
   fieldSize: 32,
   tuftSpacing: 0.4,
   tuftJitter: 0.15,
@@ -57,12 +84,30 @@ export const DEFAULT_TUNING: Tuning = {
   damage: 1,
 
   grassHp: [1, 2, 3],
-  grassYield: [0.09, 0.27, 0.486],
+  grassYield: [0.11, 0.33, 0.594],
+
+  pileBack: 0.55,
+  dryTime: 18,
+  pickupRadius: 1.0,
+  carryCap: 16,
+  carrySlow: 0.35,
+  stackReach: 3.0,
+  unloadRate: 40,
+  yesterdayKg: 12,
+  yesterdayPiles: 4,
+
+  perkMaxLevel: 5,
+  arcPerLevel: 25,
+  reachPerLevel: 0.35,
+  ratePerLevel: 0.12,
+  carryPerLevel: 4,
+  levelKg: [8, 18, 30, 44, 60, 78, 98, 120],
 };
 
 /** Плоский список чисел набора в фиксированном порядке — для хеша и для записи забега. */
 export function tuningValues(t: Tuning): number[] {
   return [
+    t.dayLength,
     t.fieldSize,
     t.tuftSpacing,
     t.tuftJitter,
@@ -87,6 +132,22 @@ export function tuningValues(t: Tuning): number[] {
     t.grassYield[0],
     t.grassYield[1],
     t.grassYield[2],
+    t.pileBack,
+    t.dryTime,
+    t.pickupRadius,
+    t.carryCap,
+    t.carrySlow,
+    t.stackReach,
+    t.unloadRate,
+    t.yesterdayKg,
+    t.yesterdayPiles,
+    t.perkMaxLevel,
+    t.arcPerLevel,
+    t.reachPerLevel,
+    t.ratePerLevel,
+    t.carryPerLevel,
+    t.levelKg.length,
+    ...t.levelKg,
   ];
 }
 
@@ -95,5 +156,6 @@ export function cloneTuning(t: Tuning): Tuning {
     ...t,
     grassHp: [t.grassHp[0], t.grassHp[1], t.grassHp[2]],
     grassYield: [t.grassYield[0], t.grassYield[1], t.grassYield[2]],
+    levelKg: t.levelKg.slice(),
   };
 }

@@ -3,13 +3,14 @@
 
 import { describe, expect, it } from 'vitest';
 import { botInput, createBot } from '../src/sim/bot.ts';
+import { autoplay } from '../src/sim/autoplay.ts';
 import { createGame, step } from '../src/sim/game.ts';
 import { hashGame } from '../src/sim/hash.ts';
 import { makeReplay, Recorder, runReplay } from '../src/sim/replay.ts';
 import { cloneTuning, DEFAULT_TUNING } from '../src/sim/tuning.ts';
 
 const SEEDS = [1, 2, 3, 20261112];
-const TICKS = 1800; // минута игры
+const TICKS = 1800; // шагов ввода (около минуты игры)
 
 function playBot(seed: number, ticks: number) {
   const g = createGame(seed);
@@ -43,11 +44,20 @@ describe('одинаковость симуляции', () => {
     });
   }
 
-  it('бот действительно косит', () => {
+  it('бот действительно косит, носит в стог и берёт перки', () => {
     const { g } = playBot(1, TICKS);
     expect(g.swings).toBeGreaterThan(20);
     expect(g.cutTufts).toBeGreaterThan(200);
     expect(g.field.standing).toBe(g.field.count - g.cutTufts);
+    expect(g.stacked).toBeGreaterThan(20);
+    expect(g.level).toBeGreaterThan(1);
+  });
+
+  it('полный день бота воспроизводится по записи', () => {
+    const { game, recorder } = autoplay(4);
+    expect(game.over).toBe(true);
+    const replay = makeReplay(4, DEFAULT_TUNING, recorder);
+    expect(hashGame(runReplay(replay, DEFAULT_TUNING))).toBe(hashGame(game));
   });
 
   it('разные зёрна дают разные поля', () => {

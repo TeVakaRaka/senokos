@@ -23,6 +23,11 @@ export interface Look {
   groundMown: number; // скошенное
   groundOutside: number; // за полем
 
+  // Кучки сена: только скошена → сохнет → готова
+  pileWet: number;
+  pileDrying: number;
+  pileReady: number;
+
   // Свет
   sky: number;
   skyGround: number;
@@ -47,6 +52,9 @@ const JULY: Look = {
   groundUnder: 0x4a7729,
   groundMown: 0xa6bd5a,
   groundOutside: 0x3d632c,
+  pileWet: 0x7aa83a,
+  pileDrying: 0xb8b545,
+  pileReady: 0xf2b630,
   sky: 0xe8f3ff,
   skyGround: 0x6b7a3c,
   skyIntensity: 2.2,
@@ -70,6 +78,9 @@ const AUGUST: Look = {
   groundUnder: 0x617d2b,
   groundMown: 0xc6c065,
   groundOutside: 0x4a632a,
+  pileWet: 0x8aa83a,
+  pileDrying: 0xd2c24e,
+  pileReady: 0xff9d1c,
   sky: 0xfff1de,
   skyGround: 0x7d7a3c,
   skyIntensity: 2.1,
@@ -93,6 +104,9 @@ const TOY: Look = {
   groundUnder: 0x3f8f3a,
   groundMown: 0xbcd96c,
   groundOutside: 0x2f6b3a,
+  pileWet: 0x63b83a,
+  pileDrying: 0xc9d24a,
+  pileReady: 0xffb81f,
   sky: 0xf2fbff,
   skyGround: 0x6f8f4a,
   skyIntensity: 2.4,

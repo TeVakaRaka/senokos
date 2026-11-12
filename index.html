@@ -17,18 +17,34 @@
     <div id="stick-base"></div>
     <div id="stick-knob"></div>
 
+    <div id="carry" aria-hidden="true"><div id="carry-fill"></div></div>
+    <div id="stack-arrow" aria-hidden="true">➜</div>
+
     <div id="hud">
-      <div class="pill" id="hud-mown">Скошено 0 % <small>· 0 кг</small></div>
-      <div class="pill" id="hud-time">0:00</div>
+      <div class="pill" id="hud-stack">
+        <span class="hud-stack-line">🌾 <b id="hud-stack-kg">0</b> <small>кг в стогу</small></span>
+        <span class="xp" aria-hidden="true"><span id="hud-xp-fill"></span></span>
+      </div>
+      <div class="pill" id="hud-time">3:00</div>
     </div>
     <div id="debug-line"></div>
 
     <div id="overlay">
       <h1>Сенокос</h1>
-      <p id="overlay-text">Веди пальцем по экрану — косарь идёт и косит сам.</p>
+      <p id="overlay-text">
+        Веди пальцем — косарь косит сам. Скошенное сохнет и становится золотым: собери его и
+        отнеси в стог до конца дня.
+      </p>
       <button id="overlay-button" type="button">Играть</button>
       <div id="look-row" role="group" aria-label="Вид травы"></div>
     </div>
+
+    <div id="perks" hidden>
+      <p class="perks-title">Новое улучшение</p>
+      <div id="perk-list"></div>
+    </div>
+
+    <div id="results" hidden></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -2,14 +2,18 @@
 // Никакого браузера, никаких часов: одинаковые зерно и ввод дают одинаковое состояние
 // на любом устройстве.
 
-import { cosDeg } from './dmath.ts';
+import { cosDeg, sinDeg } from './dmath.ts';
 import { DIR_COUNT, DIR_X, DIR_Y } from './dirs.ts';
 import { cellCoord, standingWithin, type Field } from './field.ts';
 import { generateLevel, STACK_RADIUS, type Rock } from './gen.ts';
+import { dropPile, dryPiles, pickUp, unload, type PickEvent, type Pile } from './hay.ts';
+import { applyChoice, checkLevel, CHOICE_BASE, derive, OFFER_SIZE, PERK_COUNT, type Derived } from './perks.ts';
 import { Rng } from './rng.ts';
 import { cloneTuning, DEFAULT_TUNING, DT, TICK_RATE, type Tuning } from './tuning.ts';
 
-/** Ввод за шаг: 0 — палец не касается, 1…64 — направление (номер + 1). */
+export type { Derived } from './perks.ts';
+
+/** Ввод за шаг: 0 — палец не касается, 1…64 — направление (номер + 1), 65…67 — выбор перка. */
 export const INPUT_NONE = 0;
 
 export interface Hero {
@@ -23,19 +27,6 @@ export interface Hero {
   load: number; // кг в охапке
 }
 
-/** Числа, выведенные из набора баланса и уровней перков. */
-export interface Derived {
-  reach: number;
-  reach2: number;
-  arcDeg: number;
-  arcCos: number; // косинус половины дуги взмаха
-  probeCos: number; // косинус половины узкого сектора «прямо по курсу»
-  swingTicks: number;
-  damage: number;
-  mowSpeed: number; // шаг косаря, м/с
-  wadeSpeed: number;
-}
-
 export interface SwingEvent {
   x: number;
   y: number;
@@ -43,12 +34,15 @@ export interface SwingEvent {
   reach: number;
   arcDeg: number;
   cut: number; // сколько кустиков срезано этим взмахом
+  kg: number; // сколько сена срезано
 }
 
 export interface Game {
   seed: number;
   tuning: Tuning;
-  tick: number;
+  tick: number; // шагов игрового времени (выбор перка время не двигает)
+  dayTicks: number; // длина дня в шагах
+  over: boolean; // день окончен
   rng: Rng;
 
   field: Field;
@@ -59,6 +53,13 @@ export interface Game {
   hero: Hero;
   d: Derived;
 
+  piles: Pile[];
+  nextPileId: number;
+  stacked: number; // кг в стогу
+  level: number; // сколько порогов пройдено
+  perks: number[]; // уровни перков
+  offer: number[] | null; // предложенные перки, пока игрок выбирает
+
   // Статистика
   swings: number;
   cutTufts: number;
@@ -68,6 +69,11 @@ export interface Game {
   swing: SwingEvent | null;
   cutIdx: Int32Array;
   cutCount: number;
+  newPileIds: number[];
+  readyIds: number[];
+  picks: PickEvent[];
+  unloadedKg: number;
+  leveled: boolean;
   /** Сколько ударов ещё требует трава прямо по курсу (0 — травы впереди нет). */
   needAhead: number;
 }
@@ -75,10 +81,13 @@ export interface Game {
 export function createGame(seed: number, tuning: Tuning = DEFAULT_TUNING): Game {
   const t = cloneTuning(tuning);
   const level = generateLevel(seed, t);
+  const perks = new Array<number>(PERK_COUNT).fill(0);
   const g: Game = {
     seed,
     tuning: t,
     tick: 0,
+    dayTicks: Math.max(1, Math.round(t.dayLength * TICK_RATE)),
+    over: false,
     rng: new Rng((seed ^ 0x51ed270b) >>> 0),
     field: level.field,
     stackX: level.stackX,
@@ -94,74 +103,124 @@ export function createGame(seed: number, tuning: Tuning = DEFAULT_TUNING): Game 
       swingCd: 0,
       load: 0,
     },
-    d: derive(t),
+    d: derive(t, perks),
+    piles: [],
+    nextPileId: 1,
+    stacked: 0,
+    level: 0,
+    perks,
+    offer: null,
     swings: 0,
     cutTufts: 0,
     cutKg: 0,
     swing: null,
-    cutIdx: new Int32Array(1024),
+    cutIdx: new Int32Array(2048),
     cutCount: 0,
+    newPileIds: [],
+    readyIds: [],
+    picks: [],
+    unloadedKg: 0,
+    leveled: false,
     needAhead: 0,
   };
+  placeYesterdayHay(g);
   return g;
 }
 
-export function derive(t: Tuning): Derived {
-  const swingTicks = Math.max(1, Math.round(t.swingPeriod * TICK_RATE));
-  return {
-    reach: t.reach,
-    reach2: t.reach * t.reach,
-    arcDeg: t.arcDeg,
-    arcCos: cosDeg(t.arcDeg / 2),
-    probeCos: cosDeg(t.probeDeg),
-    swingTicks,
-    damage: Math.max(1, Math.round(t.damage)),
-    mowSpeed: (t.stepFrac * t.reach) / (swingTicks * DT),
-    wadeSpeed: t.runSpeed * t.wadeFactor,
-  };
+/**
+ * «Вчерашнее» сено: готовые кучки дугой у стога по пути героя.
+ * Первая выгрузка и первый перк — в первые секунды дня.
+ */
+function placeYesterdayHay(g: Game): void {
+  const t = g.tuning;
+  const n = Math.max(0, Math.round(t.yesterdayPiles));
+  if (n === 0 || t.yesterdayKg <= 0) return;
+  const kg = t.yesterdayKg / n;
+  const r = STACK_RADIUS + 1.25;
+  for (let i = 0; i < n; i++) {
+    const angle = 70 + i * 40; // от героя (45°) вокруг стога
+    g.piles.push({
+      id: g.nextPileId++,
+      x: g.stackX + cosDeg(angle) * r,
+      y: g.stackY + sinDeg(angle) * r,
+      mass: kg,
+      dry: 1,
+    });
+  }
 }
 
-/** Один шаг симуляции (1/30 секунды). */
+/** Один шаг симуляции (1/30 секунды) или выбор перка. */
 export function step(g: Game, input: number): void {
+  // События прошлого шага больше не нужны.
+  g.swing = null;
+  g.cutCount = 0;
+  g.newPileIds.length = 0;
+  g.readyIds.length = 0;
+  g.picks.length = 0;
+  g.unloadedKg = 0;
+  g.leveled = false;
+
+  if (g.over) return;
+
+  // Пока игрок выбирает перк, время стоит; принимается только выбор.
+  if (g.offer !== null) {
+    const index = input - CHOICE_BASE;
+    if (index >= 0 && index < OFFER_SIZE) applyChoice(g, index);
+    return;
+  }
+
   const h = g.hero;
   const t = g.tuning;
   const d = g.d;
 
   g.tick++;
-  g.swing = null;
-  g.cutCount = 0;
   h.px = h.x;
   h.py = h.y;
 
   const moving = input >= 1 && input <= DIR_COUNT;
   if (moving) h.dir = input - 1;
 
-  // 1. Коса: бьёт сама, как только готова и в секторе есть трава.
+  // 1. Сушка (на шаге 2 солнце всегда).
+  dryPiles(g, 1);
+
+  // 2. Коса: бьёт сама, как только готова и в секторе есть трава. С полной охапкой — на плече.
   if (h.swingCd > 0) h.swingCd--;
-  scythe(g);
+  const full = h.load >= d.carryCap;
+  scythe(g, !full);
 
-  if (!moving) {
-    h.speed = 0;
-    return;
-  }
-
-  // 2. Скорость — наименьшая из трёх: бег, шаг косаря, брод по стоячей траве.
-  let target = t.runSpeed;
-  if (g.needAhead > 0) {
-    const pace = d.mowSpeed / g.needAhead;
-    if (pace < target) target = pace;
-  }
-  if (standingWithin(g.field, h.x, h.y, t.wadeRadius) && d.wadeSpeed < target) target = d.wadeSpeed;
-
-  if (target < h.speed) {
-    const slowed = h.speed - t.accel * 2 * DT;
-    h.speed = slowed < target ? target : slowed;
+  // 3. Движение. Скорость — наименьшая из бега (с поправкой на груз и брод) и шага косаря.
+  if (moving) {
+    let target = t.runSpeed * (1 - (t.carrySlow * h.load) / d.carryCap);
+    if (standingWithin(g.field, h.x, h.y, t.wadeRadius)) target *= t.wadeFactor;
+    if (g.needAhead > 0) {
+      const pace = d.mowSpeed / g.needAhead;
+      if (pace < target) target = pace;
+    }
+    if (target < h.speed) {
+      const slowed = h.speed - t.accel * 2 * DT;
+      h.speed = slowed < target ? target : slowed;
+    } else {
+      const sped = h.speed + t.accel * DT;
+      h.speed = sped > target ? target : sped;
+    }
+    move(g);
   } else {
-    const sped = h.speed + t.accel * DT;
-    h.speed = sped > target ? target : sped;
+    h.speed = 0;
   }
 
-  // 3. Перемещение, края поля и препятствия.
+  // 4. Сбор готовых кучек и выгрузка в стог.
+  pickUp(g);
+  g.unloadedKg = unload(g);
+  if (g.unloadedKg > 0) checkLevel(g);
+
+  // 5. Конец дня.
+  if (g.tick >= g.dayTicks) g.over = true;
+}
+
+/** Перемещение героя на шаг: края поля и препятствия. */
+function move(g: Game): void {
+  const h = g.hero;
+  const t = g.tuning;
   let nx = h.x + DIR_X[h.dir]! * h.speed * DT;
   let ny = h.y + DIR_Y[h.dir]! * h.speed * DT;
 
@@ -207,11 +266,15 @@ export function step(g: Game, input: number): void {
 }
 
 /**
- * Обходит кустики в радиусе косы. Если коса готова и в секторе взмаха есть трава — бьёт.
- * Заодно считает, сколько ударов ещё требует трава в узком секторе прямо по курсу:
- * от этого зависит шаг косаря.
+ * Обходит кустики в радиусе косы. Если коса готова и в секторе взмаха есть трава — бьёт,
+ * а срезанное кладёт кучкой за спиной героя. Заодно считает, сколько ударов ещё требует
+ * трава в узком секторе прямо по курсу: от этого зависит шаг косаря.
  */
-function scythe(g: Game): void {
+function scythe(g: Game, enabled: boolean): void {
+  if (!enabled) {
+    g.needAhead = 0;
+    return;
+  }
   const h = g.hero;
   const d = g.d;
   const f = g.field;
@@ -221,6 +284,7 @@ function scythe(g: Game): void {
   let cut = 0;
   let hit = 0;
   let need = 0;
+  let kg = 0;
 
   const c0 = cellCoord(f.cols, h.x - d.reach);
   const c1 = cellCoord(f.cols, h.x + d.reach);
@@ -249,7 +313,7 @@ function scythe(g: Game): void {
           if (hp === 0) {
             f.standing--;
             cut++;
-            g.cutKg += g.tuning.grassYield[f.type[i]!]!;
+            kg += g.tuning.grassYield[f.type[i]!]!;
             if (g.cutCount < g.cutIdx.length) g.cutIdx[g.cutCount++] = i;
           }
         }
@@ -266,6 +330,11 @@ function scythe(g: Game): void {
     h.swingCd = d.swingTicks;
     g.swings++;
     g.cutTufts += cut;
-    g.swing = { x: h.x, y: h.y, dir: h.dir, reach: d.reach, arcDeg: d.arcDeg, cut };
+    g.cutKg += kg;
+    g.swing = { x: h.x, y: h.y, dir: h.dir, reach: d.reach, arcDeg: d.arcDeg, cut, kg };
+    if (kg > 0) {
+      const back = g.tuning.pileBack;
+      dropPile(g, kg, h.x - fx * back, h.y - fy * back);
+    }
   }
 }

@@ -1,13 +1,12 @@
 #!/bin/sh
 # Публикация игры на GitHub Pages: https://tevakaraka.github.io/senokos/
-# Собирает игру и кладёт сборку в ветку gh-pages. Звуки не публикуются (права не проверены).
+# Собирает игру и кладёт сборку в ветку gh-pages.
 # Запуск: npm run deploy
 set -e
 cd "$(dirname "$0")/.."
 
 npm test --silent
 npm run build --silent
-rm -rf dist/audio
 touch dist/.nojekyll
 
 cd dist

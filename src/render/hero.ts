@@ -17,7 +17,11 @@ export class HeroView {
   private readonly legL: THREE.Mesh;
   private readonly legR: THREE.Mesh;
   private readonly scythe = new THREE.Group();
+  private readonly bundle: THREE.Mesh;
   private readonly swooshMaterial: THREE.ShaderMaterial;
+  private load = 0; // доля заполнения охапки 0…1
+  private full = false;
+  private shoulder = 0; // 0 — коса в руках, 1 — на плече (плавно)
 
   private facing = 0; // текущий угол модели, радианы (в координатах симуляции)
   private walk = 0; // фаза шага
@@ -69,6 +73,13 @@ export class HeroView {
     blade.rotation.y = 0.3;
     this.scythe.add(snath, blade);
     this.body.add(this.scythe);
+
+    // Охапка сена за спиной: растёт вместе с грузом.
+    this.bundle = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 1), lambert(0xe9b93c));
+    this.bundle.position.set(-0.32, 1.02, 0);
+    this.bundle.scale.set(0.8, 0.7, 1);
+    this.bundle.visible = false;
+    this.body.add(this.bundle);
     this.group.add(this.body);
 
     // Тень-пятно под героем
@@ -134,6 +145,12 @@ export class HeroView {
     this.swoosh.visible = true;
   }
 
+  /** Сколько сена несёт герой: доля охапки 0…1 и полна ли она. */
+  setLoad(fraction: number, full: boolean): void {
+    this.load = fraction;
+    this.full = full;
+  }
+
   update(x: number, z: number, dirAngle: number, speed: number, dt: number): void {
     this.group.position.set(x, 0, z);
 
@@ -163,6 +180,24 @@ export class HeroView {
     this.scythe.rotation.y = -angle;
     this.body.rotation.y = -angle * 0.25;
     this.body.rotation.z = this.swingAge < SWING_TIME ? -0.12 * Math.sin(t * Math.PI) : 0;
+
+    // С полной охапкой коса уходит на плечо.
+    this.shoulder += ((this.full ? 1 : 0) - this.shoulder) * (1 - Math.exp(-dt * 10));
+    if (this.shoulder > 0.01) {
+      this.scythe.rotation.y = this.scythe.rotation.y * (1 - this.shoulder) + 1.3 * this.shoulder;
+      this.scythe.rotation.z = 0.9 * this.shoulder;
+      this.body.rotation.y *= 1 - this.shoulder;
+    } else {
+      this.scythe.rotation.z = 0;
+    }
+
+    // Охапка: появляется с первым сеном и растёт до полной.
+    this.bundle.visible = this.load > 0.01;
+    if (this.bundle.visible) {
+      const s = 0.45 + 0.75 * this.load;
+      this.bundle.scale.set(0.8 * s, 0.7 * s, s);
+      this.bundle.position.y = 1.0 + 0.12 * this.load;
+    }
 
     // След
     const prog = this.swingAge / SWOOSH_TIME;

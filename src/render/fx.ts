@@ -1,4 +1,5 @@
-// Клочки травы, разлетающиеся от взмаха. Чисто для глаз: на счёт не влияют.
+// Летящие клочки: трава от взмаха, сено в охапку и в стог, искры у готовой кучки.
+// Чисто для глаз: на счёт не влияют.
 
 import * as THREE from 'three';
 
@@ -12,6 +13,10 @@ interface Bit {
   spin: number;
   age: number;
   life: number;
+  gravity: number;
+  r: number;
+  g: number;
+  b: number;
 }
 
 export class CutBits {
@@ -19,32 +24,94 @@ export class CutBits {
   private readonly bits: Bit[] = [];
   private readonly capacity: number;
   private readonly dummy = new THREE.Object3D();
+  private readonly color = new THREE.Color();
+  private readonly grass = new THREE.Color(0x9fcf45);
 
   constructor(capacity: number) {
     this.capacity = capacity;
     const geometry = new THREE.PlaneGeometry(0.22, 0.06);
-    const material = new THREE.MeshBasicMaterial({ color: 0x9fcf45, side: THREE.DoubleSide });
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
     this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
     this.mesh.count = 0;
     this.mesh.frustumCulled = false;
+    this.mesh.setColorAt(0, this.grass);
   }
 
-  /** Выбросить клочки из точки среза. dirX/dirZ — куда смотрел герой. */
+  private push(bit: Omit<Bit, 'r' | 'g' | 'b'>, color: THREE.Color): void {
+    if (this.bits.length >= this.capacity) return;
+    this.bits.push({ ...bit, r: color.r, g: color.g, b: color.b });
+  }
+
+  /** Трава из-под косы. dirX/dirZ — куда смотрел герой. */
   spawn(x: number, z: number, dirX: number, dirZ: number, amount: number): void {
-    for (let i = 0; i < amount && this.bits.length < this.capacity; i++) {
+    for (let i = 0; i < amount; i++) {
       const a = Math.random() * Math.PI * 2;
       const side = 0.6 + Math.random() * 1.2;
-      this.bits.push({
-        x,
-        y: 0.25 + Math.random() * 0.3,
-        z,
-        vx: dirX * 1.2 + Math.cos(a) * side,
-        vy: 2.2 + Math.random() * 1.8,
-        vz: dirZ * 1.2 + Math.sin(a) * side,
-        spin: (Math.random() - 0.5) * 18,
-        age: 0,
-        life: 0.45 + Math.random() * 0.3,
-      });
+      this.push(
+        {
+          x,
+          y: 0.25 + Math.random() * 0.3,
+          z,
+          vx: dirX * 1.2 + Math.cos(a) * side,
+          vy: 2.2 + Math.random() * 1.8,
+          vz: dirZ * 1.2 + Math.sin(a) * side,
+          spin: (Math.random() - 0.5) * 18,
+          age: 0,
+          life: 0.45 + Math.random() * 0.3,
+          gravity: 9.5,
+        },
+        this.grass,
+      );
+    }
+  }
+
+  /** Клочки летят дугой из одной точки в другую (в охапку, в стог). */
+  spawnToward(fx: number, fy: number, fz: number, tx: number, ty: number, tz: number, amount: number, color: number): void {
+    this.color.setHex(color);
+    for (let i = 0; i < amount; i++) {
+      const life = 0.32 + Math.random() * 0.14;
+      const gravity = 14;
+      const sx = fx + (Math.random() - 0.5) * 0.4;
+      const sz = fz + (Math.random() - 0.5) * 0.4;
+      // Начальная скорость, чтобы за life долететь до цели по параболе.
+      this.push(
+        {
+          x: sx,
+          y: fy,
+          z: sz,
+          vx: (tx - sx) / life,
+          vy: (ty - fy) / life + (gravity * life) / 2,
+          vz: (tz - sz) / life,
+          spin: (Math.random() - 0.5) * 16,
+          age: 0,
+          life,
+          gravity,
+        },
+        this.color,
+      );
+    }
+  }
+
+  /** Искры вверх — кучка высохла. */
+  sparkle(x: number, z: number, color: number): void {
+    this.color.setHex(color);
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + Math.random();
+      this.push(
+        {
+          x,
+          y: 0.35,
+          z,
+          vx: Math.cos(a) * 0.9,
+          vy: 2.6 + Math.random(),
+          vz: Math.sin(a) * 0.9,
+          spin: 10,
+          age: 0,
+          life: 0.5,
+          gravity: 6,
+        },
+        this.color,
+      );
     }
   }
 
@@ -54,7 +121,7 @@ export class CutBits {
       const b = this.bits[i]!;
       b.age += dt;
       if (b.age >= b.life) continue;
-      b.vy -= 9.5 * dt;
+      b.vy -= b.gravity * dt;
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       b.z += b.vz * dt;
@@ -65,17 +132,23 @@ export class CutBits {
         b.vy = 0;
       }
       this.bits[alive] = b;
-      const shrink = 1 - (b.age / b.life) * (b.age / b.life);
+      const k = b.age / b.life;
+      const shrink = 1 - k * k;
       this.dummy.position.set(b.x, b.y, b.z);
       this.dummy.rotation.set(b.age * b.spin, b.age * b.spin * 0.7, 0.4);
       this.dummy.scale.setScalar(shrink);
       this.dummy.updateMatrix();
       this.mesh.setMatrixAt(alive, this.dummy.matrix);
+      this.color.setRGB(b.r, b.g, b.b);
+      this.mesh.setColorAt(alive, this.color);
       alive++;
     }
     this.bits.length = alive;
     this.mesh.count = alive;
-    if (alive > 0) this.mesh.instanceMatrix.needsUpdate = true;
+    if (alive > 0) {
+      this.mesh.instanceMatrix.needsUpdate = true;
+      if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   dispose(): void {

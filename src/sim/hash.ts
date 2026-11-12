@@ -22,6 +22,7 @@ function mixNumber(h: number, v: number): number {
 export function hashGame(g: Game): number {
   let h = 0x811c9dc5;
   h = mixNumber(h, g.tick);
+  h = mixNumber(h, g.over ? 1 : 0);
   h = mixNumber(h, g.rng.state);
   const hero = g.hero;
   h = mixNumber(h, hero.x);
@@ -33,6 +34,20 @@ export function hashGame(g: Game): number {
   h = mixNumber(h, g.swings);
   h = mixNumber(h, g.cutTufts);
   h = mixNumber(h, g.cutKg);
+  h = mixNumber(h, g.stacked);
+  h = mixNumber(h, g.level);
+  for (let i = 0; i < g.perks.length; i++) h = mixNumber(h, g.perks[i]!);
+  if (g.offer) for (let i = 0; i < g.offer.length; i++) h = mixNumber(h, 100 + g.offer[i]!);
+  h = mixNumber(h, g.nextPileId);
+  h = mixNumber(h, g.piles.length);
+  for (let i = 0; i < g.piles.length; i++) {
+    const p = g.piles[i]!;
+    h = mixNumber(h, p.id);
+    h = mixNumber(h, p.x);
+    h = mixNumber(h, p.y);
+    h = mixNumber(h, p.mass);
+    h = mixNumber(h, p.dry);
+  }
   h = mixNumber(h, g.field.standing);
   const hp = g.field.hp;
   for (let i = 0; i < hp.length; i++) h = mixByte(h, hp[i]!);
