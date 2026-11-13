@@ -70,6 +70,7 @@ export interface Player {
   shield: number; // шагов, пока его нельзя ударить снова
   down: number; // шагов лежит после выстрела: не двигается и ничего не делает
   still: number; // сколько шагов подряд стоит на месте (сено в ларёк и будку сдаётся только стоя)
+  armor: number; // сколько выстрелов ещё выдержит бронежилет (0 — его нет)
   fly: number; // шагов ещё летит, отброшенный выстрелом
   flyX: number; // смещение за шаг, пока летит
   flyY: number;
@@ -125,6 +126,10 @@ export interface Player {
   dogBorn: boolean; // на этом шаге у него появилась собака
   dogDied: boolean; // на этом шаге его собаку застрелили
   dogHurt: boolean; // на этом шаге его собаке подрезали ноги
+  ammoBought: number; // сколько патронов купил на этом шаге
+  vestBought: boolean; // на этом шаге купил бронежилет
+  armorHitBy: number; // чей выстрел на этом шаге принял его бронежилет; −1 — ничей
+  dryFire: boolean; // на этом шаге щёлкнул пустым ружьём
   /** Сколько ударов ещё требует трава прямо по курсу (0 — травы впереди нет). */
   needAhead: number;
 }
@@ -165,7 +170,7 @@ export interface Game {
   gun: Gun | null; // ружьё; null — ещё не вышло из магазина
   kennels: Kennel[]; // будка у стога каждого игрока (в игре на одного — нет)
   dogs: (Dog | null)[]; // собака каждого игрока; null — нет
-  spentKg: number; // сено, ушедшее на покупку собак
+  spentKg: number; // сено, ушедшее на покупки: собаки, патроны, бронежилеты
 
   // Общие буферы событий шага (у каждого игрока в них свой отрезок).
   cutIdx: Int32Array;
@@ -229,6 +234,8 @@ export function createGame(seed: number, tuning: Tuning = DEFAULT_TUNING, player
           since: new Array<number>(playerCount).fill(0),
           stamp: 0,
           sold: false,
+          ammoKg: new Array<number>(playerCount).fill(0),
+          vestKg: new Array<number>(playerCount).fill(0),
         }
       : null,
     gun: null,
@@ -266,6 +273,7 @@ function newPlayer(id: number, start: Point, stack: Point, t: Tuning): Player {
     shield: 0,
     down: 0,
     still: 0,
+    armor: 0,
     fly: 0,
     flyX: 0,
     flyY: 0,
@@ -315,6 +323,10 @@ function newPlayer(id: number, start: Point, stack: Point, t: Tuning): Player {
     dogBorn: false,
     dogDied: false,
     dogHurt: false,
+    ammoBought: 0,
+    vestBought: false,
+    armorHitBy: -1,
+    dryFire: false,
     needAhead: 0,
   };
 }
@@ -394,6 +406,10 @@ export function step(g: Game, inputs: number | readonly number[]): void {
     p.dogBorn = false;
     p.dogDied = false;
     p.dogHurt = false;
+    p.ammoBought = 0;
+    p.vestBought = false;
+    p.armorHitBy = -1;
+    p.dryFire = false;
   }
   for (let i = 0; i < g.dogs.length; i++) {
     const dog = g.dogs[i];

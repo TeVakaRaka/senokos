@@ -117,11 +117,36 @@ export class Sound {
     osc.stop(t + 0.2);
   }
 
-  /** Выстрел из двустволки: хлопок и низкий удар. volume — тише для дальнего выстрела. */
+  /**
+   * Выстрел из двустволки: резкий хлопок, низкий удар и раскат эха по полю — чтобы его
+   * нельзя было спутать со взмахом косы. volume — тише для дальнего выстрела.
+   */
   bang(volume = 1): void {
-    this.noise(0.32, 0.55 * volume, 1600, 'lowpass');
-    this.noise(0.06, 0.4 * volume, 4200, 'highpass');
-    this.sweep(110, 38, 0.3, 0.45 * volume, 'sine');
+    const v = volume > 1 ? 1 : volume;
+    // Хлопок: короткий яркий щелчок и «тело» выстрела.
+    this.noise(0.05, 0.85 * v, 5200, 'highpass');
+    this.noise(0.24, 0.85 * v, 2600, 'lowpass');
+    // Низкий удар.
+    this.sweep(170, 38, 0.36, 0.9 * v, 'sine');
+    this.sweep(95, 32, 0.5, 0.45 * v, 'triangle');
+    // Раскат: эхо катится над полем.
+    this.noise(0.5, 0.3 * v, 950, 'lowpass', 0.1);
+    this.noise(0.75, 0.16 * v, 520, 'lowpass', 0.3);
+  }
+
+  /** Выстрел принял бронежилет: глухой звонкий удар по пластине. */
+  clank(): void {
+    if (!this.running()) return;
+    this.noise(0.05, 0.4, 3200, 'bandpass');
+    this.tone(196, 0, 0.3, 0.22, 'triangle');
+    this.tone(523.25, 0.01, 0.22, 0.12, 'square');
+    this.tone(784, 0.02, 0.4, 0.08, 'sine');
+  }
+
+  /** Пустое ружьё: сухой щелчок курка. */
+  dry(): void {
+    this.noise(0.03, 0.35, 3600, 'highpass');
+    this.noise(0.04, 0.2, 1400, 'bandpass', 0.05);
   }
 
   /** Лай: два коротких «гав». */
@@ -233,7 +258,7 @@ export class Sound {
   }
 
   /** Короткий шум через фильтр: свист, шорох, удар. */
-  private noise(length: number, volume: number, freq: number, type: BiquadFilterType): void {
+  private noise(length: number, volume: number, freq: number, type: BiquadFilterType, delay = 0): void {
     const ctx = this.running();
     if (!ctx) return;
     if (!this.noiseBuffer) {
@@ -242,7 +267,7 @@ export class Sound {
       for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
       this.noiseBuffer = buffer;
     }
-    const t = ctx.currentTime;
+    const t = ctx.currentTime + delay;
     const source = ctx.createBufferSource();
     source.buffer = this.noiseBuffer;
     const filter = ctx.createBiquadFilter();

@@ -161,7 +161,7 @@ describe('локации', () => {
     a!.tool = TOOL_SCYTHE; // ружьё стреляет только с косой в руках
     a!.dir = toward(g, 0, b!.x, b!.y) - 1;
     g.shop!.sold = true;
-    g.gun = { holder: 0, x: 0, y: 0, cd: 0 };
+    g.gun = { holder: 0, x: 0, y: 0, cd: 0, ammo: 5 };
     step(g, [0, 0]);
     expect(b!.down).toBeGreaterThan(0);
     run(g, [0, 0], g.flyTicks + 2);
@@ -203,11 +203,12 @@ describe('локации', () => {
     a.tool = TOOL_SCYTHE;
     a.dir = dirFromVector(b.x - a.x, b.y - a.y);
     g.shop!.sold = true;
-    g.gun = { holder: 0, x: 0, y: 0, cd: 0 };
+    g.gun = { holder: 0, x: 0, y: 0, cd: 0, ammo: 5 };
     for (let i = 0; i < 30; i++) step(g, [0, 0]);
     expect(a.shotHits).toBe(0);
     expect(b.down).toBe(0);
-    expect(g.gun.cd).toBe(0); // и заряд не потрачен
+    expect(g.gun.cd).toBe(0);
+    expect(g.gun.ammo).toBe(5); // и патрон не потрачен
     place(b, a.x + f.tx * 1.6, a.y + f.ty * 1.6);
     a.dir = dirFromVector(b.x - a.x, b.y - a.y);
     step(g, [0, 0]);

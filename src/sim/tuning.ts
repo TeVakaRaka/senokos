@@ -72,6 +72,11 @@ export interface Tuning {
   giveDwell: number; // сколько надо простоять, чтобы сено пошло в ларёк или будку, с (перехват пальца не в счёт)
 
   // Ружьё
+  gunShells: number; // сколько патронов в ружье, когда оно выходит из ларька (двустволка заряжена)
+  ammoPackKg: number; // цена пачки патронов в ларьке, кг сена
+  ammoPack: number; // сколько патронов в пачке
+  vestKg: number; // цена бронежилета в ларьке, кг сена
+  vestHits: number; // сколько выстрелов держит бронежилет
   gunPeriod: number; // секунд между выстрелами (коса бьёт раз в секунду)
   gunArcDeg: number; // ширина конуса выстрела, градусы
   gunDogExtra: number; // на столько дальше косы ружьё достаёт собаку: косу она обходит, а ружья не боится, м
@@ -152,6 +157,11 @@ export const DEFAULT_TUNING: Tuning = {
   shopReach: 2.8,
   giveDwell: 0.25,
 
+  gunShells: 2,
+  ammoPackKg: 10,
+  ammoPack: 10,
+  vestKg: 10,
+  vestHits: 3,
   gunPeriod: 2,
   gunArcDeg: 60,
   gunDogExtra: 1,
@@ -227,6 +237,11 @@ export function tuningValues(t: Tuning): number[] {
     t.shopKgEach,
     t.shopReach,
     t.giveDwell,
+    t.gunShells,
+    t.ammoPackKg,
+    t.ammoPack,
+    t.vestKg,
+    t.vestHits,
     t.gunPeriod,
     t.gunArcDeg,
     t.gunDogExtra,

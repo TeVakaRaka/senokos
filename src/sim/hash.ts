@@ -40,6 +40,7 @@ export function hashGame(g: Game): number {
     h = mixNumber(h, p.crawl);
     h = mixNumber(h, p.down);
     h = mixNumber(h, p.still);
+    h = mixNumber(h, p.armor);
     h = mixNumber(h, p.fly);
     h = mixNumber(h, p.flyX);
     h = mixNumber(h, p.flyY);
@@ -82,6 +83,8 @@ export function hashGame(g: Game): number {
     for (let k = 0; k < g.shop.given.length; k++) {
       h = mixNumber(h, g.shop.given[k]!);
       h = mixNumber(h, g.shop.since[k]!);
+      h = mixNumber(h, g.shop.ammoKg[k]!);
+      h = mixNumber(h, g.shop.vestKg[k]!);
     }
   }
   if (g.gun) {
@@ -89,6 +92,7 @@ export function hashGame(g: Game): number {
     h = mixNumber(h, g.gun.x);
     h = mixNumber(h, g.gun.y);
     h = mixNumber(h, g.gun.cd);
+    h = mixNumber(h, g.gun.ammo);
   }
   h = mixNumber(h, g.spentKg);
   for (let k = 0; k < g.kennels.length; k++) h = mixNumber(h, g.kennels[k]!.kg);

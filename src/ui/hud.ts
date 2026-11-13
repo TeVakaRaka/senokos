@@ -27,12 +27,31 @@ interface Foe {
   arrow: HTMLElement;
 }
 
+/** «1 патрон», «3 патрона», «10 патронов». */
+export function shells(n: number): string {
+  return `${n} ${plural(n, 'патрон', 'патрона', 'патронов')}`;
+}
+
+/** «1 выстрел», «3 выстрела», «5 выстрелов». */
+export function shots(n: number): string {
+  return `${n} ${plural(n, 'выстрел', 'выстрела', 'выстрелов')}`;
+}
+
+function plural(n: number, one: string, few: string, many: string): string {
+  const d = n % 10;
+  const h = n % 100;
+  if (d === 1 && h !== 11) return one;
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return few;
+  return many;
+}
+
 /** Значок ружья (силуэт двустволки). */
 export const GUN_ICON = '<svg viewBox="0 0 32 12" aria-hidden="true"><path d="M1.5 10.5 7.5 6.2H30v2.3H11.4l-1.9 2.3z" fill="currentColor"/><path d="M12 8.5h3.2l-.8 2.6h-2.9z" fill="currentColor"/></svg>';
 
 /** Подпись над предметом на поле: заголовок, полоска сбора и число. */
 interface Tag {
   root: HTMLElement;
+  head: HTMLElement;
   bar: HTMLElement;
   text: HTMLElement;
   key: string;
@@ -49,7 +68,7 @@ function makeTag(className: string, title: string): Tag {
   const text = document.createElement('small');
   root.append(head, bar, text);
   document.body.append(root);
-  return { root, bar, text, key: '' };
+  return { root, head, bar, text, key: '' };
 }
 
 export class Hud {
@@ -70,7 +89,12 @@ export class Hud {
   private readonly gunArrow: HTMLElement;
   private readonly gunBadge: HTMLElement;
   private readonly gunBadgeText: HTMLElement;
+  private readonly vestBadge: HTMLElement;
+  private readonly holderTag: HTMLElement;
+  private readonly holderAmmo: HTMLElement;
   private gunKey = '';
+  private vestKey = -1;
+  private holderKey = '';
   private lastKg = -1;
   private lastSeconds = -1;
   private alarmUntil = 0;
@@ -100,7 +124,25 @@ export class Hud {
     this.gunBadge = $('gun-badge');
     this.gunBadge.innerHTML = `${GUN_ICON}<small></small>`;
     this.gunBadgeText = this.gunBadge.querySelector('small')!;
-    for (const el of [this.shopTag.root, this.kennelTag.root, this.gunTag, this.gunArrow, this.gunBadge]) el.hidden = true;
+    this.vestBadge = $('vest-badge');
+    // Значок над тем соперником, у кого ружьё: сколько в нём патронов и готово ли оно стрелять.
+    this.holderTag = document.createElement('div');
+    this.holderTag.className = 'world-tag holder-tag';
+    this.holderTag.setAttribute('aria-hidden', 'true');
+    this.holderTag.innerHTML = `${GUN_ICON}<b></b>`;
+    this.holderAmmo = this.holderTag.querySelector('b')!;
+    document.body.append(this.holderTag);
+    for (const el of [
+      this.shopTag.root,
+      this.kennelTag.root,
+      this.gunTag,
+      this.gunArrow,
+      this.gunBadge,
+      this.vestBadge,
+      this.holderTag,
+    ]) {
+      el.hidden = true;
+    }
     const mark = document.createElement('span');
     mark.className = 'gun-mark';
     mark.innerHTML = GUN_ICON;
@@ -194,15 +236,21 @@ export class Hud {
     this.updateArms(game, view, w, h);
   }
 
-  /** Ларёк, будка, ружьё: подписи над ними, стрелка к упавшему ружью, у кого ружьё. */
+  /**
+   * Ларёк, будка, ружьё, патроны, бронежилет: подписи над ними, стрелка к упавшему ружью,
+   * значок над тем, у кого ружьё.
+   */
   private updateArms(game: Game, view: View, w: number, h: number): void {
     const p = game.players[this.me]!;
+    const t = game.tuning;
     const gun = game.gun;
     const shop = game.shop;
+    const holder = gun ? gun.holder : -1;
 
-    // Над ларьком: сколько сена собрано и кто сколько сдал (полоска из цветных кусков).
+    // Над ларьком: пока ружьё не вышло — сколько сена собрано и кто впереди; потом — что он
+    // продаёт именно тебе: патроны (если ружьё твоё) или бронежилет.
     const shopTag = this.shopTag;
-    if (shop && !shop.sold && !game.over) {
+    if (shop && !game.over) {
       const s = view.worldToScreen(shop.x, 4.1, shop.y);
       shopTag.root.hidden = !(s.inFront && s.x > -60 && s.x < w + 60 && s.y > -40 && s.y < h + 40);
       shopTag.root.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
@@ -210,24 +258,49 @@ export class Hud {
       // её ровно там, где остановка сработает.
       const dx = p.x - shop.x;
       const dy = p.y - shop.y;
-      const near = game.tuning.shopReach;
-      const hint = p.load > 0.05 && p.speed > 0 && dx * dx + dy * dy < near * near;
-      const leader = shopLeader(shop);
-      const key = `${shop.given.map((v) => Math.floor(v)).join('|')}|${leader}|${hint}`;
-      if (key !== shopTag.key) {
-        shopTag.key = key;
-        shopTag.bar.textContent = '';
-        shop.given.forEach((kg, k) => {
-          if (kg <= 0) return;
-          const seg = document.createElement('i');
-          seg.style.width = `${(kg / game.shopKg) * 100}%`;
-          seg.style.background = playerCss(k);
-          shopTag.bar.append(seg);
-        });
+      const close = p.load > 0.05 && p.speed > 0 && dx * dx + dy * dy < t.shopReach * t.shopReach;
+      let key: string;
+      let title: string;
+      let text: string;
+      let hint = false;
+      let bar = '';
+      if (!shop.sold) {
+        const leader = shopLeader(shop);
+        hint = close;
+        key = `pot|${shop.given.map((v) => Math.floor(v)).join('|')}|${leader}|${hint}`;
+        title = 'Ружьё';
         // Ружьё получит тот, кто сдал больше всех: показываем, кто сейчас впереди.
         const ahead =
           leader < 0 ? ' сена' : leader === this.me ? ' · впереди ты' : ` · впереди <i class="dot" style="background:${playerCss(leader)}"></i>`;
-        shopTag.text.innerHTML = hint ? 'остановись — сдашь сено' : `${Math.floor(shop.kg)} из ${game.shopKg} кг${ahead}`;
+        text = hint ? 'остановись — сдашь сено' : `${Math.floor(shop.kg)} из ${game.shopKg} кг${ahead}`;
+        shop.given.forEach((kg, k) => {
+          if (kg > 0) bar += `<i style="width:${(kg / game.shopKg) * 100}%;background:${playerCss(k)}"></i>`;
+        });
+      } else if (holder === this.me) {
+        const credit = shop.ammoKg[this.me]!;
+        hint = close;
+        key = `ammo|${Math.floor(credit)}|${hint}`;
+        title = 'Патроны';
+        text = hint ? 'остановись — купишь' : `${Math.floor(credit)} из ${t.ammoPackKg} кг · пачка ${t.ammoPack} шт.`;
+        bar = `<i style="width:${(credit / t.ammoPackKg) * 100}%;background:${playerCss(this.me)}"></i>`;
+      } else if (p.armor >= t.vestHits) {
+        key = `worn|${p.armor}`;
+        title = 'Бронежилет';
+        text = `надет · держит ${shots(p.armor)}`;
+        bar = `<i style="width:100%;background:${playerCss(this.me)}"></i>`;
+      } else {
+        const credit = shop.vestKg[this.me]!;
+        hint = close;
+        key = `vest|${Math.floor(credit)}|${hint}|${p.armor}`;
+        title = 'Бронежилет';
+        text = hint ? 'остановись — купишь' : `${Math.floor(credit)} из ${t.vestKg} кг · держит ${shots(t.vestHits)}`;
+        bar = `<i style="width:${(credit / t.vestKg) * 100}%;background:${playerCss(this.me)}"></i>`;
+      }
+      if (key !== shopTag.key) {
+        shopTag.key = key;
+        shopTag.head.textContent = title;
+        shopTag.bar.innerHTML = bar;
+        shopTag.text.innerHTML = text;
         shopTag.root.classList.toggle('hint', hint);
       }
     } else {
@@ -243,13 +316,12 @@ export class Hud {
       kennelTag.root.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
       const dx = p.x - kennel.x;
       const dy = p.y - kennel.y;
-      const near = game.tuning.kennelReach;
-      const hint = p.load > 0.05 && p.speed > 0 && dx * dx + dy * dy < near * near;
+      const hint = p.load > 0.05 && p.speed > 0 && dx * dx + dy * dy < t.kennelReach * t.kennelReach;
       const key = `${Math.floor(kennel.kg)}|${hint}`;
       if (key !== kennelTag.key) {
         kennelTag.key = key;
-        kennelTag.bar.innerHTML = `<i style="width:${(kennel.kg / game.tuning.dogKg) * 100}%;background:${playerCss(this.me)}"></i>`;
-        kennelTag.text.textContent = hint ? 'остановись — сдашь сено' : `${Math.floor(kennel.kg)} из ${game.tuning.dogKg} кг сена`;
+        kennelTag.bar.innerHTML = `<i style="width:${(kennel.kg / t.dogKg) * 100}%;background:${playerCss(this.me)}"></i>`;
+        kennelTag.text.textContent = hint ? 'остановись — сдашь сено' : `${Math.floor(kennel.kg)} из ${t.dogKg} кг сена`;
         kennelTag.root.classList.toggle('hint', hint);
       }
     } else {
@@ -271,18 +343,60 @@ export class Hud {
     }
 
     // У кого ружьё: значок в плашке счёта, а если оно твоё — плашка у кнопки инструмента.
-    // Ружьё стреляет только с косой в руках: с граблями плашка тускнеет и просит взять косу.
-    const holder = gun ? gun.holder : -1;
-    const ready = p.tool === TOOL_SCYTHE || p.d.combo;
-    const key = `${holder}|${game.over}|${ready}`;
+    // Ружьё стреляет, только когда в руках коса и есть патроны: иначе плашка тускнеет
+    // и говорит, чего не хватает.
+    const ammo = gun ? gun.ammo : 0;
+    const inHands = p.tool === TOOL_SCYTHE || p.d.combo;
+    const key = `${holder}|${game.over}|${inHands}|${ammo}`;
     if (key !== this.gunKey) {
       this.gunKey = key;
       this.meItem.classList.toggle('has-gun', holder === this.me);
       for (const foe of this.foes) foe.item.classList.toggle('has-gun', holder === foe.index);
       this.gunBadge.hidden = holder !== this.me || game.over;
-      this.gunBadge.classList.toggle('idle', !ready);
-      this.gunBadgeText.textContent = ready ? 'Ружьё стреляет само' : 'Возьми косу — выстрелит';
+      this.gunBadge.classList.toggle('idle', !inHands || ammo === 0);
+      this.gunBadgeText.textContent =
+        ammo === 0 ? 'Патронов нет — купи в ларьке' : inHands ? `Ружьё: ${shells(ammo)}` : `Возьми косу · ${shells(ammo)}`;
     }
+
+    // Над соперником с ружьём — значок и число патронов: видно, от кого держаться подальше.
+    // Тусклый — когда оно выстрелить не может (в руках грабли или патронов нет).
+    const foeArmed = holder >= 0 && holder !== this.me && !game.over;
+    if (foeArmed) {
+      const q = game.players[holder]!;
+      const s = view.worldToScreen(q.x, 2.5, q.y);
+      this.holderTag.hidden = !(s.inFront && s.x > 0 && s.x < w && s.y > 70 && s.y < h);
+      this.holderTag.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
+      const ready = ammo > 0 && (q.tool === TOOL_SCYTHE || q.d.combo) && q.crawl === 0 && q.down === 0;
+      const tagKey = `${ammo}|${ready}`;
+      if (tagKey !== this.holderKey) {
+        this.holderKey = tagKey;
+        this.holderAmmo.textContent = String(ammo);
+        this.holderTag.classList.toggle('idle', !ready);
+      }
+    } else {
+      this.holderTag.hidden = true;
+    }
+
+    // Свой бронежилет: сколько выстрелов он ещё выдержит.
+    const armor = game.over ? 0 : p.armor;
+    if (armor !== this.vestKey) {
+      this.vestKey = armor;
+      this.vestBadge.hidden = armor <= 0;
+      this.vestBadge.textContent = `Бронежилет: держит ${shots(armor)}`;
+    }
+  }
+
+  /** Всплывающее слово над местом на поле (экранные координаты): «БАХ!» над стрелком. */
+  pop(text: string, x: number, y: number): void {
+    const el = document.createElement('div');
+    el.className = 'pop';
+    el.setAttribute('aria-hidden', 'true');
+    el.style.transform = `translate(${x}px, ${y}px)`;
+    const word = document.createElement('span');
+    word.textContent = text;
+    el.append(word);
+    document.body.append(el);
+    setTimeout(() => el.remove(), 800);
   }
 
   /** Красная вспышка по краям: подрезали ноги. */

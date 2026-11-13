@@ -1,15 +1,20 @@
-// Ларёк в центре поля и ружьё.
+// Ларёк в центре поля, ружьё, патроны и бронежилеты.
 //
-// В ларёк все сдают сено в общий котёл; цена — столько-то килограммов на каждого игрока.
-// Сдать можно, только остановившись у прилавка и чуть постояв: на ходу тюк в ларёк не уходит. Когда котёл
-// полон, ружьё получает тот, кто сдал больше всех (при равенстве — кто раньше набрал своё).
-// Оно одно на весь день.
+// Пока ружьё не вышло, все сдают сено в общий котёл; цена — столько-то килограммов на каждого
+// игрока. Когда котёл полон, ружьё получает тот, кто сдал больше всех (при равенстве — кто
+// раньше набрал своё). Оно одно на весь день и выходит с двумя патронами.
 //
-// Ружьё стреляет само, вперёд по ходу, пока в руках коса: с граблями оно за спиной и молчит.
-// Бьёт ближайшего перед стволом — соперника или чужую собаку (её — чуть дальше, чем достаёт
-// коса: от косы собака уворачивается, от ружья нет); забор от выстрела закрывает.
-// Подстреленный отлетает и долго лежит, чужая собака погибает. Кому подрезали ноги, тот
-// роняет ружьё — подобрать его может любой.
+// Дальше ларёк торгует: хозяину ружья — патронами (пачка в десять штук за десять килограммов
+// сена), остальным — бронежилетами (десять килограммов; держит три выстрела). Что покупаешь,
+// выбирать не надо: это видно по тому, у кого ружьё. Сдать сено можно, только остановившись
+// у прилавка и чуть постояв: на ходу тюк в ларёк не уходит.
+//
+// Ружьё стреляет само, вперёд по ходу, пока в руках коса и есть патроны: с граблями оно за
+// спиной и молчит. Бьёт ближайшего перед стволом — соперника или чужую собаку (её — чуть
+// дальше, чем достаёт коса: от косы собака уворачивается, от ружья нет); забор от выстрела
+// закрывает. Подстреленный отлетает и долго лежит, бронежилет принимает выстрел на себя,
+// чужая собака погибает. Кому подрезали ноги, тот роняет ружьё вместе с патронами —
+// подобрать его может любой.
 
 import { holdsGun, knockDown, onFeet, scytheActive } from './combat.ts';
 import { DIR_X, DIR_Y } from './dirs.ts';
@@ -26,6 +31,8 @@ export interface Shop {
   since: number[]; // номер последней досыпки игрока (0 — не сдавал): кто раньше набрал своё
   stamp: number; // сколько раз в ларёк досыпали
   sold: boolean; // ружьё уже вышло
+  ammoKg: number[]; // сено игрока, сданное в счёт следующей пачки патронов
+  vestKg: number[]; // сено игрока, сданное в счёт бронежилета
 }
 
 export interface Gun {
@@ -33,6 +40,7 @@ export interface Gun {
   x: number;
   y: number;
   cd: number; // шагов до следующего выстрела
+  ammo: number; // патронов в ружье (остаются в нём, если его уронить)
 }
 
 export interface ShotEvent {
@@ -44,6 +52,7 @@ export interface ShotEvent {
   dog: number; // чью собаку застрелил или −1
   tx: number; // куда попал
   ty: number;
+  blocked: boolean; // выстрел принял бронежилет
 }
 
 /** Кто сдал в ларёк больше всех (−1 — никто не сдавал). При равенстве — кто раньше набрал своё. */
@@ -60,36 +69,88 @@ export function shopLeader(shop: Shop): number {
 /**
  * Сено в ларёк: игрок остановился у прилавка с тюком и постоял четверть секунды. На ходу
  * сено не уходит — иначе тюк пропадал бы у каждого, кто бежит через центр поля; не уходит
- * и за миг, пока палец перехватывает джойстик. Котёл полон — ружьё получает тот, кто сдал
- * больше всех, где бы он в этот миг ни был.
+ * и за миг, пока палец перехватывает джойстик.
+ *
+ * Пока ружьё не вышло, сено идёт в общий котёл. Потом ларёк продаёт хозяину ружья патроны,
+ * а остальным — бронежилеты.
  */
 export function giveShop(g: Game, p: Player): boolean {
   const shop = g.shop;
-  if (!shop || shop.sold || p.load <= 0 || p.still < g.dwellTicks) return false;
+  if (!shop || p.load <= 0 || p.still < g.dwellTicks) return false;
   const t = g.tuning;
   const dx = p.x - shop.x;
   const dy = p.y - shop.y;
   if (dx * dx + dy * dy > t.shopReach * t.shopReach) return false;
-  let kg = t.unloadRate * DT;
+  if (!shop.sold) return fillPot(g, shop, p);
+  const gun = g.gun;
+  if (gun && gun.holder === p.id) return buyAmmo(g, shop, gun, p);
+  return buyVest(g, shop, p);
+}
+
+/** Общий котёл: наполнился — ружьё получает тот, кто сдал больше всех, где бы он ни был. */
+function fillPot(g: Game, shop: Shop, p: Player): boolean {
+  let kg = g.tuning.unloadRate * DT;
   if (kg > p.load) kg = p.load;
   const room = g.shopKg - shop.kg;
   if (kg > room) kg = room;
-  p.load -= kg;
-  if (p.load < 1e-9) p.load = 0;
+  take(p, kg);
   shop.kg += kg;
   shop.given[p.id] = shop.given[p.id]! + kg;
   shop.stamp++;
   shop.since[p.id] = shop.stamp;
-  p.delivered += kg;
-  p.shopKg = kg;
   if (shop.kg >= g.shopKg - 1e-9) {
     shop.kg = g.shopKg;
     shop.sold = true;
     const winner = g.players[shopLeader(shop)]!;
-    g.gun = { holder: winner.id, x: winner.x, y: winner.y, cd: 0 };
+    g.gun = { holder: winner.id, x: winner.x, y: winner.y, cd: 0, ammo: g.tuning.gunShells };
     winner.gotGun = true;
   }
   return true;
+}
+
+/** Патроны хозяину ружья: сено копится в счёт пачки, набралось на пачку — она в ружье. */
+function buyAmmo(g: Game, shop: Shop, gun: Gun, p: Player): boolean {
+  const t = g.tuning;
+  let kg = t.unloadRate * DT;
+  if (kg > p.load) kg = p.load;
+  take(p, kg);
+  let credit = shop.ammoKg[p.id]! + kg;
+  while (credit >= t.ammoPackKg - 1e-9) {
+    credit -= t.ammoPackKg;
+    if (credit < 1e-9) credit = 0;
+    g.spentKg += t.ammoPackKg;
+    gun.ammo += t.ammoPack;
+    p.ammoBought += t.ammoPack;
+  }
+  shop.ammoKg[p.id] = credit;
+  return true;
+}
+
+/** Бронежилет тому, у кого ружья нет: пока целый жилет надет, второй не продают. */
+function buyVest(g: Game, shop: Shop, p: Player): boolean {
+  const t = g.tuning;
+  if (p.armor >= t.vestHits) return false;
+  let kg = t.unloadRate * DT;
+  if (kg > p.load) kg = p.load;
+  const room = t.vestKg - shop.vestKg[p.id]!;
+  if (kg > room) kg = room;
+  take(p, kg);
+  shop.vestKg[p.id] = shop.vestKg[p.id]! + kg;
+  if (shop.vestKg[p.id]! >= t.vestKg - 1e-9) {
+    g.spentKg += shop.vestKg[p.id]!;
+    shop.vestKg[p.id] = 0;
+    p.armor = t.vestHits;
+    p.vestBought = true;
+  }
+  return true;
+}
+
+/** Забрать сено из тюка в ларёк: в счёт стога оно не идёт, в опыт для улучшений — идёт. */
+function take(p: Player, kg: number): void {
+  p.load -= kg;
+  if (p.load < 1e-9) p.load = 0;
+  p.delivered += kg;
+  p.shopKg = kg;
 }
 
 /** Ружьё лежит на земле — кто прошёл рядом, тот и поднял. */
@@ -107,6 +168,7 @@ export function pickGun(g: Game, p: Player): void {
 /**
  * Выстрел, если ружьё готово, в руках коса и перед стволом кто-то есть. Бьёт ближайшего
  * в конусе: соперника или чужую собаку. Дальность — как у косы; сквозь забор не бьёт.
+ * Каждый выстрел тратит патрон; без патронов ружьё только щёлкает.
  */
 export function shoot(g: Game, p: Player): void {
   const gun = g.gun;
@@ -155,16 +217,28 @@ export function shoot(g: Game, p: Player): void {
   if (victim < 0 && dogOwner < 0) return;
 
   gun.cd = g.gunTicks;
+  if (gun.ammo <= 0) {
+    p.dryFire = true; // щёлк: патронов нет — дальше работает только коса
+    return;
+  }
+  gun.ammo--;
   if (victim >= 0) {
     const q = g.players[victim]!;
+    if (q.armor > 0) {
+      // Бронежилет принял выстрел: хозяин на ногах и при тюке, жилет — на выстрел слабее.
+      q.armor--;
+      q.armorHitBy = p.id;
+      p.shot = { x: p.x, y: p.y, dir: p.dir, reach, victim, dog: -1, tx: q.x, ty: q.y, blocked: true };
+      return;
+    }
     const dist = Math.sqrt(bestD2);
     const ux = dist > 1e-6 ? (q.x - p.x) / dist : fx;
     const uy = dist > 1e-6 ? (q.y - p.y) / dist : fy;
-    p.shot = { x: p.x, y: p.y, dir: p.dir, reach, victim, dog: -1, tx: q.x, ty: q.y };
+    p.shot = { x: p.x, y: p.y, dir: p.dir, reach, victim, dog: -1, tx: q.x, ty: q.y, blocked: false };
     knockDown(g, p, q, ux, uy);
   } else {
     const dog = g.dogs[dogOwner]!;
-    p.shot = { x: p.x, y: p.y, dir: p.dir, reach, victim: -1, dog: dogOwner, tx: dog.x, ty: dog.y };
+    p.shot = { x: p.x, y: p.y, dir: p.dir, reach, victim: -1, dog: dogOwner, tx: dog.x, ty: dog.y, blocked: false };
     killDog(g, p, dogOwner);
   }
 }

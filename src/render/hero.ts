@@ -7,8 +7,8 @@ import { TOOL_RAKE } from '../sim/game.ts';
 import { buildGun } from './arms.ts';
 import { baleScale, buildBale } from './props.ts';
 
-const AIM_TIME = 0.55; // секунд ружьё держит у бедра после выстрела
-const FLASH_TIME = 0.07; // секунд видна вспышка у дула
+const AIM_TIME = 0.55; // секунд ружьё вскинуто после выстрела
+const FLASH_TIME = 0.13; // секунд видна вспышка у дула
 
 const SWING_TIME = 0.2; // секунд длится взмах на экране
 const SWOOSH_TIME = 0.32; // секунд виден белый след
@@ -26,6 +26,8 @@ export interface HeroPose {
   crawling: boolean; // ноги подрезаны
   shielded: boolean; // только что встал и пока неуязвим
   gun: boolean; // при нём ружьё
+  gunReady: boolean; // оно в руках и может выстрелить (в руках коса, есть патроны)
+  armor: number; // сколько выстрелов ещё держит бронежилет (0 — его нет)
   flying: number; // 0…1 — летит, отброшенный выстрелом (0 — не летит)
   down: boolean; // лежит после выстрела
 }
@@ -41,7 +43,9 @@ export class HeroView {
   private readonly body = new THREE.Group();
   private readonly gun: THREE.Group;
   private readonly flash: THREE.Mesh;
-  private aim = 0; // 1 — только что выстрелил: ружьё у бедра
+  private aim = 0; // 1 — только что выстрелил: отдача
+  private hold = 0; // 0 — ружьё за спиной, 1 — в руках, стволом вперёд (плавно)
+  private readonly vest = new THREE.Group();
   private flashAge = 10;
   private downMix = 0; // 0 — на ногах, 1 — лежит на спине (плавно)
   private readonly legL: THREE.Mesh;
@@ -96,6 +100,17 @@ export class HeroView {
     armR.position.z = 0.2;
     this.body.add(torso, head, brim, band, crown, armL, armR);
 
+    // Бронежилет поверх рубахи: тёмный, с пластиной на груди — видно, кого ружьё не свалит.
+    const vestBody = new THREE.Mesh(new THREE.CylinderGeometry(0.215, 0.27, 0.48, 7), lambert(0x3f4a36));
+    vestBody.position.y = 0.86;
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.26, 0.3), lambert(0x8a9577));
+    plate.position.set(0.21, 0.9, 0);
+    const back = plate.clone();
+    back.position.x = -0.21;
+    this.vest.add(vestBody, plate, back);
+    this.vest.visible = false;
+    this.body.add(this.vest);
+
     // Коса: косовище от рук к земле перед героем и лезвие поперёк. Модель смотрит вдоль +x.
     const snathLength = 1.45;
     const snathTilt = 0.52; // наклон к земле, радианы
@@ -112,11 +127,11 @@ export class HeroView {
     this.scythe.add(snath, blade);
     this.body.add(this.scythe);
 
-    // Ружьё: за спиной наискосок; при выстреле — у бедра, стволом вперёд.
+    // Ружьё: в руках, стволом вперёд, пока может выстрелить; иначе — за спиной наискосок.
     this.gun = buildGun();
     this.gun.visible = false;
     this.flash = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.16, 0),
+      new THREE.IcosahedronGeometry(0.3, 0),
       new THREE.MeshBasicMaterial({ color: 0xfff0a0, transparent: true, opacity: 0.95, depthWrite: false }),
     );
     this.flash.visible = false;
@@ -345,16 +360,21 @@ export class HeroView {
       }
     }
 
-    // Ружьё за спиной; после выстрела — у правого бедра стволом вперёд, потом обратно.
+    // Ружьё: пока может выстрелить — в руках у правого бока, стволом вперёд, крупнее, чтобы
+    // его было видно издали; иначе (в руках грабли или нет патронов) — за спиной.
     this.gun.visible = pose.gun;
+    this.hold += ((pose.gunReady ? 1 : 0) - this.hold) * (1 - Math.exp(-dt * 12));
     this.aim = Math.max(0, this.aim - dt / AIM_TIME);
-    const a = this.aim > 0.6 ? 1 : this.aim / 0.6; // быстро вскинул, медленно убрал
-    this.gun.position.set(-0.22 + 0.36 * a, 1.0 - 0.08 * a, 0.02 + 0.22 * a);
-    this.gun.rotation.set((-Math.PI / 4) * (1 - a), (-Math.PI / 2) * (1 - a), 0);
+    const a = Math.max(this.hold, this.aim > 0.6 ? 1 : this.aim / 0.6);
+    const kick = Math.max(0, this.aim - 0.7) / 0.3; // отдача: первые доли секунды после выстрела
+    this.gun.position.set(-0.22 + 0.44 * a - 0.16 * kick, 1.0 - 0.06 * a + 0.05 * kick, 0.02 + 0.3 * a);
+    this.gun.rotation.set((-Math.PI / 4) * (1 - a), (-Math.PI / 2) * (1 - a), 0.3 * kick);
+    this.gun.scale.setScalar(1 + 0.5 * a);
     this.flashAge += dt;
     this.flash.visible = this.flashAge < FLASH_TIME;
-    if (this.flash.visible) this.flash.scale.setScalar(1 + this.flashAge * 12);
-    if (this.aim > 0.85) this.body.position.x -= 0.1 * (this.aim - 0.85) * 6; // отдача
+    if (this.flash.visible) this.flash.scale.setScalar(1 + this.flashAge * 9);
+    this.body.position.x -= 0.12 * kick;
+    this.vest.visible = pose.armor > 0;
 
     // Подстрелили: летит назад, кувыркаясь, и лежит на спине.
     this.downMix += ((pose.down ? 1 : 0) - this.downMix) * (1 - Math.exp(-dt * (pose.down ? 14 : 5)));

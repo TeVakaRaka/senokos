@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { DIR_STEP_DEG, DIR_X, DIR_Y } from '../sim/dirs.ts';
-import type { Game, Player } from '../sim/game.ts';
+import { scytheActive, type Game, type Player } from '../sim/game.ts';
 import { DT } from '../sim/tuning.ts';
 import { buildKennel, GroundGunView, ShopView } from './arms.ts';
 import { IsoCamera } from './camera.ts';
@@ -72,6 +72,21 @@ export interface StepFx {
   myDogHurt: boolean; // твоей собаке подрезали лапы
   myDogDied: boolean; // твою собаку застрелили
   cutDog: boolean; // сам подрезал лапы чужой собаке
+
+  // Выстрел, который все видят и слышат; патроны и бронежилеты
+  bang: boolean; // на этом шаге кто-то выстрелил — над стрелком всплывает «БАХ!»
+  bangX: number; // где (в координатах поля)
+  bangZ: number;
+  shotMeBy: number; // кто подстрелил самого (−1 — никто)
+  shotBlocked: boolean; // свой выстрел принял чужой бронежилет
+  armorSaved: boolean; // свой бронежилет принял выстрел
+  armorLeft: number; // сколько выстрелов он ещё выдержит
+  ammoBought: number; // сколько патронов сам купил
+  vestBought: boolean; // сам купил бронежилет
+  dryFire: boolean; // щёлкнул пустым ружьём
+  foeGave: number; // кто из соперников сдал сено в ларёк (−1 — никто)
+  foeAmmo: number; // кто из соперников купил патроны (−1 — никто)
+  foeVest: number; // кто из соперников купил бронежилет (−1 — никто)
 }
 
 const BASE_VIEW = 15; // метров по высоте экрана при обычной косе
@@ -105,6 +120,8 @@ export class View {
     crawling: false,
     shielded: false,
     gun: false,
+    gunReady: false,
+    armor: 0,
     flying: 0,
     down: false,
   };
@@ -254,6 +271,19 @@ export class View {
       myDogHurt: me.dogHurt,
       myDogDied: me.dogDied,
       cutDog: false,
+      bang: false,
+      bangX: 0,
+      bangZ: 0,
+      shotMeBy: me.shotBy,
+      shotBlocked: false,
+      armorSaved: me.armorHitBy >= 0,
+      armorLeft: me.armor,
+      ammoBought: me.ammoBought,
+      vestBought: me.vestBought,
+      dryFire: me.dryFire,
+      foeGave: -1,
+      foeAmmo: -1,
+      foeVest: -1,
     };
     const field = game.field;
     const gameTime = game.tick * DT;
@@ -269,7 +299,9 @@ export class View {
         const dirX = DIR_X[swing.dir]!;
         const dirZ = DIR_Y[swing.dir]!;
         const facing = (swing.dir * DIR_STEP_DEG * Math.PI) / 180;
-        hero.swingAt(swing.x, swing.y, facing, swing.reach, swing.arcDeg);
+        // Если в тот же миг он выстрелил, белый след косы не рисуем: иначе выстрел выглядит
+        // как удар косой (трава всё равно ложится).
+        if (!p.shot) hero.swingAt(swing.x, swing.y, facing, swing.reach, swing.arcDeg);
         if (mine) {
           fx.swung = true;
           fx.swingCut = swing.cut;
@@ -366,16 +398,27 @@ export class View {
         this.ground.stampBlood(p.x, p.y, 0.17);
       }
 
-      // Выстрел: ружьё к бедру, вспышка, дробь веером; попал — кровь.
+      // Выстрел: отдача, вспышка, дым у дула, дробь и искры веером; попал — кровь,
+      // в бронежилет — сноп искр.
       const shot = p.shot;
       if (shot) {
         hero.fire();
         const dirX = DIR_X[shot.dir]!;
         const dirZ = DIR_Y[shot.dir]!;
-        this.bits.spray(shot.x + dirX * 0.7, 0.95, shot.y + dirZ * 0.7, dirX, dirZ, 0.45, shot.reach, 18, 0x2c2c2c);
-        this.bits.spray(shot.x + dirX * 0.7, 0.95, shot.y + dirZ * 0.7, dirX, dirZ, 0.25, shot.reach * 0.6, 8, 0xffd36a);
-        this.bits.burst(shot.tx, 0.6, shot.ty, 20, BLOOD_COLOR);
-        this.ground.stampBlood(shot.tx, shot.ty, 0.8);
+        const mx = shot.x + dirX * 1.1;
+        const mz = shot.y + dirZ * 1.1;
+        this.bits.spray(mx, 0.95, mz, dirX, dirZ, 0.45, shot.reach, 22, 0x2c2c2c);
+        this.bits.spray(mx, 0.95, mz, dirX, dirZ, 0.3, shot.reach * 0.9, 18, 0xffd36a);
+        this.bits.burst(mx, 1.05, mz, 14, 0xe9e4d6);
+        if (shot.blocked) {
+          this.bits.burst(shot.tx, 0.9, shot.ty, 18, 0xfff2b0);
+        } else {
+          this.bits.burst(shot.tx, 0.6, shot.ty, 20, BLOOD_COLOR);
+          this.ground.stampBlood(shot.tx, shot.ty, 0.8);
+        }
+        fx.bang = true;
+        fx.bangX = mx;
+        fx.bangZ = mz;
         if (shot.dog >= 0) {
           const view = this.dogs[shot.dog];
           if (view) {
@@ -386,7 +429,8 @@ export class View {
         }
         if (mine) {
           fx.shotFired = true;
-          fx.shotFoe = shot.victim >= 0;
+          fx.shotFoe = shot.victim >= 0 && !shot.blocked;
+          fx.shotBlocked = shot.blocked;
           fx.shotDog = shot.dog >= 0;
           this.shake = 1;
         } else {
@@ -395,6 +439,12 @@ export class View {
         }
       }
       if (p.shotBy >= 0 && mine) this.shake = 1;
+      if (p.armorHitBy >= 0 && mine) this.shake = 0.6;
+      if (!mine) {
+        if (p.shopKg > 0 && p.ammoBought === 0 && !p.vestBought) fx.foeGave = k;
+        if (p.ammoBought > 0) fx.foeAmmo = k;
+        if (p.vestBought) fx.foeVest = k;
+      }
       if (p.gotGun && !mine) fx.gunTaken = k;
       if (p.lostGun && !mine) fx.gunDropped = true;
 
@@ -460,6 +510,8 @@ export class View {
     pose.crawling = p.crawl > 0;
     pose.shielded = p.shield > 0 && !game.over;
     pose.gun = game.gun !== null && game.gun.holder === p.id;
+    pose.gunReady = pose.gun && game.gun!.ammo > 0 && scytheActive(p);
+    pose.armor = p.armor;
     pose.flying = p.fly > 0 ? 1 - p.fly / game.flyTicks : 0;
     pose.down = p.down > 0 && p.fly === 0;
     return pose;

@@ -32,7 +32,7 @@ import { DEFAULT_ROOM, HASH_EVERY, INPUT_DELAY, NET_PROTOCOL } from './net/proto
 import { Sound } from './audio/audio.ts';
 import { lookById, LOOKS } from './render/look.ts';
 import { QUALITY_HIGH, QUALITY_LOW, View, type StepFx } from './render/view.ts';
-import { Hud } from './ui/hud.ts';
+import { Hud, shells, shots } from './ui/hud.ts';
 import { Joystick } from './ui/joystick.ts';
 import { PerkCards } from './ui/perkCards.ts';
 import { colorName, colorWhose, playerCss, playerInk } from './ui/players.ts';
@@ -636,30 +636,74 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
     }
     if (fx.stole > 0) toast.show('Тащишь сено из чужого стога', 'good', 6000);
 
-    // Ружьё.
+    // Ружьё, патроны, бронежилеты.
+    const t = game.tuning;
+    if (fx.bang) {
+      // Над стрелком всплывает «БАХ!» — чтобы выстрел нельзя было принять за удар косой.
+      const at = view.worldToScreen(fx.bangX, 2.3, fx.bangZ);
+      hud.pop('БАХ!', at.x, at.y);
+    }
+    // Что делают соперники у ларька: иначе ружьё у бота появляется «из ниоткуда».
+    if (fx.foeGave >= 0 && game.shop && !game.shop.sold) {
+      const kg = Math.floor(game.shop.given[fx.foeGave]!);
+      toast.show(`${who(fx.foeGave)} несёт сено в ларёк: у него ${kg} из ${game.shopKg} кг на ружьё`, 'bad');
+    }
+    if (fx.foeAmmo >= 0) toast.show(`${who(fx.foeAmmo)} купил патроны`, 'bad');
+    if (fx.foeVest >= 0) toast.show(`${who(fx.foeVest)} надел бронежилет`, 'plain');
+    if (fx.shopGive > 0 && game.shop) {
+      sound.thump();
+      if (!game.shop.sold) {
+        toast.show(`В ларёк: ${Math.floor(game.shop.kg)} из ${game.shopKg} кг. Ружьё — кто сдал больше всех`, 'plain', 1500);
+      } else if (game.gun && game.gun.holder === ME) {
+        if (fx.ammoBought === 0) toast.show(`На патроны: ${Math.floor(game.shop.ammoKg[ME]!)} из ${t.ammoPackKg} кг`, 'plain', 1500);
+      } else if (!fx.vestBought) {
+        toast.show(`На бронежилет: ${Math.floor(game.shop.vestKg[ME]!)} из ${t.vestKg} кг`, 'plain', 1500);
+      }
+    }
+    if (fx.ammoBought > 0) {
+      sound.ching();
+      toast.show(`Куплена пачка: ${shells(fx.ammoBought)}`, 'good');
+    }
+    if (fx.vestBought) {
+      sound.ching();
+      toast.show(`Бронежилет надет: держит ${shots(t.vestHits)} из ружья`, 'good');
+    }
+    if (fx.gotGun) {
+      sound.ching();
+      const ammo = game.gun ? game.gun.ammo : 0;
+      toast.show(
+        ammo > 0 ? `Ружьё твоё, в нём ${shells(ammo)}. Стреляет само, пока в руках коса` : 'Ружьё твоё, но оно пустое: патроны — в ларьке',
+        'good',
+      );
+    }
+    if (fx.lostGun) toast.show('Ружьё выпало!', 'bad');
+    if (fx.gunTaken >= 0) toast.show(`Ружьё у ${whose(fx.gunTaken)}! Бронежилет в ларьке — ${t.vestKg} кг сена`, 'bad');
+    if (fx.gunDropped && !fx.gotGun) toast.show('Ружьё упало — хватай!', 'good');
+    if (fx.dryFire) {
+      sound.dry();
+      toast.show(`Патронов нет! Пачка в ларьке — ${t.ammoPackKg} кг сена`, 'bad', 4000);
+    }
     if (fx.shotFired) {
       sound.bang();
       platform.haptic('heavy');
       if (fx.shotFoe) toast.show('Подстрелил! Лежит долго — забирай его тюк', 'good');
+      if (fx.shotBlocked) toast.show('Попал в бронежилет — не пробил', 'bad');
       if (fx.shotDog) toast.show('Собака застрелена', 'good');
     }
     if (fx.foeShot > 0) sound.bang(fx.foeShot);
+    if (fx.armorSaved) {
+      sound.clank();
+      platform.haptic('heavy');
+      toast.show(
+        fx.armorLeft > 0 ? `Бронежилет выдержал выстрел! Осталось: ${shots(fx.armorLeft)}` : 'Бронежилет выдержал выстрел — и развалился',
+        'good',
+      );
+    }
     if (fx.shotMe) {
       sound.ouch();
       platform.haptic('heavy');
       hud.flash();
-      toast.show('Тебя подстрелили! Лежишь…', 'bad');
-    }
-    if (fx.gotGun) {
-      sound.ching();
-      toast.show('Ружьё твоё! Стреляет само, пока в руках коса', 'good');
-    }
-    if (fx.lostGun) toast.show('Ружьё выпало!', 'bad');
-    if (fx.gunTaken >= 0) toast.show(`Ружьё у ${whose(fx.gunTaken)}!`, 'bad');
-    if (fx.gunDropped && !fx.gotGun) toast.show('Ружьё упало — хватай!', 'good');
-    if (fx.shopGive > 0 && game.shop) {
-      sound.thump();
-      toast.show(`В ларёк: ${Math.floor(game.shop.kg)} из ${game.shopKg} кг. Ружьё — кто сдал больше всех`, 'plain', 1500);
+      toast.show(`${who(fx.shotMeBy)} подстрелил тебя из ружья! Лежишь…`, 'bad');
     }
 
     // Собаки.

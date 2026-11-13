@@ -65,6 +65,7 @@ export class ShopView {
   readonly group = new THREE.Group();
   private readonly hay: THREE.Mesh;
   private readonly gun: THREE.Group;
+  private readonly goods = new THREE.Group();
   private bounce = 0;
 
   constructor(x: number, z: number, hayColor: number) {
@@ -124,6 +125,20 @@ export class ShopView {
     this.gun.scale.setScalar(1.2);
     inner.add(this.gun);
 
+    // Когда ружьё продано, на прилавке — то, чем ларёк торгует дальше: пачка патронов
+    // и бронежилет.
+    const pack = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.22, 0.26), lambert(0xb3261e));
+    pack.position.set(-0.6, 1.14, 0.72);
+    const label = new THREE.Mesh(new THREE.BoxGeometry(0.37, 0.07, 0.27), lambert(0xffd23a));
+    label.position.copy(pack.position);
+    const vest = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.36, 0.16), lambert(0x3f4a36));
+    vest.position.set(0.55, 1.21, 0.72);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.22, 0.18), lambert(0x8a9577));
+    plate.position.copy(vest.position);
+    this.goods.add(pack, label, vest, plate);
+    this.goods.visible = false;
+    inner.add(this.goods);
+
     const shadow = new THREE.Mesh(
       new THREE.CircleGeometry(2.1, 24),
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.16, depthWrite: false }),
@@ -147,6 +162,7 @@ export class ShopView {
     this.hay.scale.set(0.35 + 0.65 * s, (0.15 + 0.85 * s) * squash, 0.35 + 0.65 * s);
     this.hay.position.y = 0.12 + 0.55 * this.hay.scale.y;
     this.gun.visible = !sold;
+    this.goods.visible = sold;
     // Ружьё на прилавке чуть покачивается — чтобы его заметили.
     this.gun.rotation.y = Math.sin(time * 1.6) * 0.12;
   }

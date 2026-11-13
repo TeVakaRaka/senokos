@@ -2,11 +2,12 @@
 // Нужен для тестов, подбора баланса, показа игры без рук — и как соперник в PvP.
 //
 // Порядок решений: выбрать улучшение → (PvP) поднять ружьё, уйти из-под чужого ствола
-// и от чужой собаки, раненым уйти от косы, с ружьём — охотиться (с косой в руках: с граблями
-// оно не стреляет), гнать вора, добить раненого и нападать, когда выгодно → забрать упавший
-// тюк → отвезти полный тюк (в стог, в ларёк — пока ещё можно стать тем, кто сдал больше
-// всех, — или в будку за собакой) → сходить за сеном в чужой стог → сгрести сухое сено →
-// косить полосами. Нужный инструмент бот берёт в руки сам.
+// (если нет бронежилета) и от чужой собаки, раненым уйти от косы, с заряженным ружьём —
+// охотиться (с косой в руках: с граблями оно не стреляет), гнать вора, добить раненого
+// и нападать, когда выгодно → забрать упавший тюк → отвезти тюк (в стог; в ларёк — за ружьём,
+// пока ещё можно стать тем, кто сдал больше всех, потом за патронами или бронежилетом;
+// в будку — за собакой) → сходить за сеном в чужой стог → сгрести сухое сено → косить
+// полосами. Нужный инструмент бот берёт в руки сам.
 
 import { dirFromVector } from './dirs.ts';
 import { nearestStanding, nearestTuft, standingInRect } from './field.ts';
@@ -159,9 +160,9 @@ function act(g: Game, b: Bot, p: Player): number {
     return p.crawl > 0 && stackDist > 1.6 ? goTo(g, b, p, p.stackX, p.stackY) : idle(b);
   }
 
-  // Ружьё и собаки.
+  // Ружьё и собаки. «Вооружён» — ружьё при нём и в нём есть патроны.
   const gun = g.gun;
-  const armed = gun !== null && gun.holder === p.id;
+  const armed = gun !== null && gun.holder === p.id && gun.ammo > 0;
   if (gun && gun.holder < 0) {
     // Ружьё лежит на земле — бежать подбирать.
     const gx = gun.x - p.x;
@@ -193,8 +194,9 @@ function act(g: Game, b: Bot, p: Player): number {
     const h = g.players[gun.holder]!;
     const hx = h.x - p.x;
     const hy = h.y - p.y;
-    const loaded = h.tool === TOOL_SCYTHE || h.d.combo;
-    if (loaded && onFeet(h) && hx * hx + hy * hy < GUN_DANGER * GUN_DANGER) {
+    // Без патронов ружьё тоже молчит; а в бронежилете выстрела можно не бояться.
+    const loaded = (h.tool === TOOL_SCYTHE || h.d.combo) && gun.ammo > 0;
+    if (loaded && p.armor === 0 && onFeet(h) && hx * hx + hy * hy < GUN_DANGER * GUN_DANGER) {
       b.chase = 0;
       b.raiding = false;
       b.raking = false;
@@ -266,10 +268,11 @@ function act(g: Game, b: Bot, p: Player): number {
 
   const lateDay = timeLeft < stackDist / (t.runSpeed * 0.6) + 2;
 
-  // Ружьё почти в руках: того, что уже в тюке, хватит досыпать котёл и остаться первым —
-  // нести сейчас, не дожидаясь полного тюка.
-  if (p.load > 0 && b.dest !== DEST_SHOP && b.dest !== DEST_KENNEL && g.shop && !g.shop.sold) {
-    if (p.load >= g.shopKg - g.shop.kg - 1e-6 && shopWorth(g, b, p)) b.dest = DEST_SHOP;
+  // В ларёк — сейчас, не дожидаясь полного тюка: если того, что уже в тюке, хватит досыпать
+  // котёл и остаться первым (ружьё почти в руках) или купить пачку патронов либо бронежилет.
+  if (p.load > 0 && b.dest !== DEST_SHOP && b.dest !== DEST_KENNEL && g.shop) {
+    const enough = g.shop.sold || p.load >= g.shopKg - g.shop.kg - 1e-6;
+    if (enough && shopUse(g, b, p)) b.dest = DEST_SHOP;
   }
 
   // Понёс тюк в ларёк или в будку — донести и сдать весь: там надо стоять на месте, а стоит
@@ -381,10 +384,10 @@ function deliver(g: Game, b: Bot, p: Player, late: boolean): number {
   const sx = p.stackX - p.x;
   const sy = p.stackY - p.y;
   const unloading = sx * sx + sy * sy <= t.stackReach * t.stackReach;
-  if (b.dest === DEST_STACK && !late && !unloading && p.load >= 3 && shopWorth(g, b, p)) b.dest = DEST_SHOP;
+  if (b.dest === DEST_STACK && !late && !unloading && p.load >= 3 && shopUse(g, b, p)) b.dest = DEST_SHOP;
   // Пока шёл, ружьё могло выйти или достаться другому наверняка, а собака — завестись:
   // тогда — в стог.
-  if (b.dest === DEST_SHOP && (late || !shopWorth(g, b, p))) b.dest = DEST_STACK;
+  if (b.dest === DEST_SHOP && (late || !shopUse(g, b, p))) b.dest = DEST_STACK;
   if (b.dest === DEST_KENNEL && (g.dogs[p.id] || !g.kennels[p.id] || late)) b.dest = DEST_STACK;
   b.want = TOOL_RAKE; // с граблями трава на пути не заставляет идти шагом косаря
   let tx = p.stackX;
@@ -416,20 +419,33 @@ function chooseDest(g: Game, b: Bot, p: Player): number {
     if (kennel.kg > 0 && p.load >= 3) return DEST_KENNEL;
     if ((solid || p.load >= need - 1e-6) && b.rng.int(100) < DOG_SHARE) return DEST_KENNEL;
   }
-  if (p.load >= 3 && shopWorth(g, b, p)) return DEST_SHOP;
+  if (p.load >= 3 && shopUse(g, b, p)) return DEST_SHOP;
   return DEST_STACK;
 }
 
 /**
- * Стоит ли нести сено в ларёк. Ружьё получит тот, кто сдал больше всех, поэтому:
- * если соперника уже не обогнать — не нести (сено досталось бы его ружью); если впереди так,
- * что уже не догонят, — досыпать, чтобы ружьё вышло скорее; пока гонка открыта — вступать,
- * когда пришло время или когда соперник начал первым.
+ * Стоит ли нести сено в ларёк.
+ *
+ * Пока ружьё не вышло: его получит тот, кто сдал больше всех, поэтому если соперника уже
+ * не обогнать — не нести (сено досталось бы его ружью); если впереди так, что уже не
+ * догонят, — досыпать, чтобы ружьё вышло скорее; пока гонка открыта — вступать, когда пришло
+ * время или когда соперник начал первым.
+ *
+ * Когда ружьё вышло: его хозяину — за патронами, когда они кончились; остальным — за
+ * бронежилетом, если у соперника заряженное ружьё. И то и другое — только если сена
+ * (с уже сданным в счёт покупки) на неё хватит.
  */
-function shopWorth(g: Game, b: Bot, p: Player): boolean {
+function shopUse(g: Game, b: Bot, p: Player): boolean {
   const shop = g.shop;
-  if (!shop || shop.sold || !b.seeksGun) return false;
+  if (!shop || !b.seeksGun) return false;
   const left = (g.dayTicks - g.tick) * DT;
+  if (shop.sold) {
+    const gun = g.gun;
+    if (!gun || left < 30) return false;
+    const t = g.tuning;
+    if (gun.holder === p.id) return gun.ammo === 0 && p.load + shop.ammoKg[p.id]! >= t.ammoPackKg - 1e-6;
+    return gun.holder >= 0 && gun.ammo > 0 && p.armor === 0 && p.load + shop.vestKg[p.id]! >= t.vestKg - 1e-6;
+  }
   const mine = shop.given[p.id]!;
   let best = 0; // сколько сдал самый щедрый из соперников
   for (let k = 0; k < shop.given.length; k++) {

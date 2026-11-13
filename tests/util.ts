@@ -87,13 +87,17 @@ export function tuftAtDistance(g: Game, x: number, y: number, min: number, max: 
 }
 
 /**
- * Всё сено в игре: на земле, в упавших тюках, в тюках игроков, в стогах, в магазине,
- * в будках и отданное за собак.
+ * Всё сено в игре: на земле, в упавших тюках, в тюках игроков, в стогах, в ларьке (котёл
+ * и недобранные пачки с жилетами), в будках и отданное за собак, патроны и бронежилеты.
  */
 export function totalKg(g: Game): number {
   let kg = groundKg(g) + dropsKg(g) + g.spentKg;
   for (const p of g.players) kg += p.load + p.stacked;
-  if (g.shop) kg += g.shop.kg;
+  if (g.shop) {
+    kg += g.shop.kg;
+    for (const v of g.shop.ammoKg) kg += v;
+    for (const v of g.shop.vestKg) kg += v;
+  }
   for (const k of g.kennels) kg += k.kg;
   return kg;
 }

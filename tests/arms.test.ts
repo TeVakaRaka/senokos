@@ -47,10 +47,10 @@ function buyDog(g: Game, id: number): Dog {
   return g.dogs[id]!;
 }
 
-/** Дать ружьё игроку id (как будто купил). */
-function arm(g: Game, id: number): void {
+/** Дать ружьё игроку id (как будто купил), с запасом патронов. */
+function arm(g: Game, id: number, ammo = 20): void {
   g.shop!.sold = true;
-  g.gun = { holder: id, x: 0, y: 0, cd: 0 };
+  g.gun = { holder: id, x: 0, y: 0, cd: 0, ammo };
 }
 
 describe('ларёк в центре поля', () => {
@@ -157,17 +157,22 @@ describe('ларёк в центре поля', () => {
     expect(g.shop!.kg).toBe(g.shopKg);
     expect(g.shop!.given[0]).toBeCloseTo(60, 9);
     expect(g.shop!.given[1]).toBeCloseTo(g.shopKg - 60, 9);
-    expect(b.load).toBeCloseTo(50 - (g.shopKg - 60), 9); // лишнее осталось в тюке
     expect(g.gun!.holder).toBe(0);
+    // Б стоит у прилавка дальше — и на остаток сена ларёк тут же продаёт ему бронежилет.
+    expect(b.armor).toBe(g.tuning.vestHits);
+    expect(b.load).toBeCloseTo(50 - (g.shopKg - 60) - g.tuning.vestKg, 9);
+    expect(g.gun!.ammo).toBe(g.tuning.gunShells); // двустволка выходит заряженной
 
-    // Ружьё одно на день: больше ларёк сено не берёт.
-    a.load = 10;
+    // Ружьё одно на день: в котёл ларёк сено больше не берёт (дальше он торгует — см. ниже).
+    expect(g.shop!.kg).toBe(g.shopKg);
+    a.load = 3;
     run(g, 0, 30);
-    expect(a.load).toBe(10);
+    expect(g.shop!.kg).toBe(g.shopKg);
+    expect(g.shop!.given[0]).toBeCloseTo(60, 9);
   });
 
   it('при равенстве ружьё у того, кто раньше набрал своё, — где бы он ни был', () => {
-    const shop = { x: 0, y: 0, kg: 0, sold: false, stamp: 3 };
+    const shop = { x: 0, y: 0, kg: 0, sold: false, stamp: 3, ammoKg: [], vestKg: [] };
     expect(shopLeader({ ...shop, given: [0, 0], since: [0, 0] })).toBe(-1);
     expect(shopLeader({ ...shop, given: [5, 9, 7], since: [1, 2, 3] })).toBe(1);
     expect(shopLeader({ ...shop, given: [10, 10, 1], since: [2, 1, 3] })).toBe(1);
@@ -187,8 +192,12 @@ describe('ларёк в центре поля', () => {
     run(g, [0, 0, 0], g.dwellTicks + 3);
     expect(g.shop!.sold).toBe(true);
     expect(g.gun!.holder).toBe(1);
-    expect(c.load).toBeCloseTo(4, 9);
-    expect(a.shotHits + b.shotHits).toBe(0);
+    expect(a.gotGun || b.shotHits > 0).toBe(false);
+    // Остаток сена В ларёк берёт уже в счёт бронежилета.
+    run(g, [0, 0, 0], 6);
+    expect(c.load).toBe(0);
+    expect(g.shop!.vestKg[2]).toBeCloseTo(4, 9);
+    expect(c.armor).toBe(0);
   });
 });
 
@@ -312,6 +321,128 @@ describe('ружьё', () => {
     }
     expect(got).toBe(true);
     expect(g.gun!.holder).toBe(0);
+  });
+
+  /** Поставить Б перед стволом А заново: цел, не под защитой, ружьё готово, коса — нет. */
+  function again(g: Game, a: Player, b: Player): void {
+    place(b, a.x + 1.5, a.y);
+    b.down = 0;
+    b.fly = 0;
+    b.shield = 0;
+    b.wound = 0;
+    g.gun!.cd = 0;
+    a.swingCd = 1000; // коса пока не мешает
+  }
+
+  it('каждый выстрел тратит патрон; пустое ружьё только щёлкает — и тогда бьёт коса', () => {
+    const { g, a, b } = duel(1.5);
+    g.gun!.ammo = 2;
+    again(g, a, b);
+    step(g, [0, 0]);
+    expect(a.shot).not.toBeNull();
+    expect(g.gun!.ammo).toBe(1);
+    again(g, a, b);
+    step(g, [0, 0]);
+    expect(b.down).toBeGreaterThan(0);
+    expect(g.gun!.ammo).toBe(0);
+
+    again(g, a, b);
+    a.swingCd = 0; // а теперь коса готова
+    step(g, [0, 0]);
+    expect(a.shot).toBeNull();
+    expect(a.dryFire).toBe(true);
+    expect(g.gun!.ammo).toBe(0);
+    expect(b.down).toBe(0);
+    expect(b.woundedBy).toBe(0); // без патронов хозяин ружья — обычный косарь
+    step(g, [0, 0]);
+    expect(a.dryFire).toBe(false); // щёлкает не каждый шаг, а в темпе выстрелов
+  });
+
+  it('хозяин ружья покупает в ларьке патроны: пачка в 10 штук за 10 кг, остаток копится', () => {
+    const { g, a, b } = pair();
+    arm(g, 0, 0);
+    const before = totalKg(g);
+    atCounter(g, a, -1);
+    a.load = 16;
+    let bought = 0;
+    for (let i = 0; i < 40; i++) {
+      step(g, 0);
+      bought += a.ammoBought;
+    }
+    expect(bought).toBe(10);
+    expect(g.gun!.ammo).toBe(10);
+    expect(a.load).toBe(0);
+    expect(g.shop!.ammoKg[0]).toBeCloseTo(6, 9); // шесть килограммов — в счёт следующей пачки
+    expect(a.stacked).toBe(0);
+    expect(a.delivered).toBeCloseTo(16, 9);
+    a.load = 4;
+    run(g, 0, 30);
+    expect(g.gun!.ammo).toBe(20);
+    expect(g.shop!.ammoKg[0]).toBeCloseTo(0, 9);
+    expect(totalKg(g)).toBeCloseTo(before + 20, 9);
+    // Жилет хозяину ружья не продают, а патроны — только ему.
+    expect(a.armor).toBe(0);
+    atCounter(g, b, 1);
+    b.load = 3;
+    run(g, [0, 0], 30);
+    expect(g.gun!.ammo).toBe(20);
+    expect(g.shop!.ammoKg[1]).toBe(0);
+  });
+
+  it('остальным ларёк продаёт бронежилет за 10 кг: три выстрела держит, четвёртый валит', () => {
+    const { g, a, b } = duel(1.5);
+    const before = totalKg(g);
+    atCounter(g, b, 1);
+    b.load = 16;
+    let bought = false;
+    for (let i = 0; i < 40; i++) {
+      step(g, [0, 0]);
+      if (b.vestBought) bought = true;
+    }
+    expect(bought).toBe(true);
+    expect(b.armor).toBe(g.tuning.vestHits);
+    expect(b.load).toBeCloseTo(6, 9); // лишнее сено осталось в тюке
+    expect(g.shop!.vestKg[1]).toBe(0);
+    expect(totalKg(g)).toBeCloseTo(before + 16, 9);
+    // Целый жилет второй раз не продают.
+    run(g, [0, 0], 30);
+    expect(b.load).toBeCloseTo(6, 9);
+
+    b.tool = TOOL_RAKE;
+    const ammo = g.gun!.ammo;
+    for (let hit = 1; hit <= g.tuning.vestHits; hit++) {
+      again(g, a, b);
+      step(g, [0, 0]);
+      expect(a.shot!.blocked).toBe(true);
+      expect(b.armorHitBy).toBe(0);
+      expect(b.armor).toBe(g.tuning.vestHits - hit);
+      expect(b.down).toBe(0); // на ногах
+      expect(b.load).toBeCloseTo(6, 9); // и при тюке
+      expect(g.gun!.ammo).toBe(ammo - hit); // а патрон потрачен
+    }
+    again(g, a, b);
+    step(g, [0, 0]);
+    expect(a.shot!.blocked).toBe(false);
+    expect(b.down).toBeGreaterThan(0);
+    expect(b.load).toBe(0);
+
+    // Побитый жилет можно сменить на новый.
+    again(g, a, b);
+    b.armor = 1;
+    atCounter(g, b, 1);
+    b.load = 10;
+    run(g, [0, 0], 40);
+    expect(b.armor).toBe(g.tuning.vestHits);
+    expect(b.load).toBeCloseTo(0, 9);
+  });
+
+  it('от косы бронежилет не спасает', () => {
+    const { g, b } = duel(1.5);
+    g.gun = null; // у А просто коса
+    b.armor = 3;
+    step(g, [0, 0]);
+    expect(b.woundedBy).toBe(0);
+    expect(b.armor).toBe(3);
   });
 
   it('масса сена сохраняется, когда его сдают в магазин', () => {
