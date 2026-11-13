@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { DIR_STEP_DEG, DIR_X, DIR_Y } from '../sim/dirs.ts';
-import { scytheActive, type Game, type Player } from '../sim/game.ts';
+import { allies, scytheActive, type Game, type Player } from '../sim/game.ts';
 import { DT } from '../sim/tuning.ts';
 import { buildKennel, GroundGunView, ShopView } from './arms.ts';
 import { IsoCamera } from './camera.ts';
@@ -15,6 +15,11 @@ import { HeroView, type HeroPose } from './hero.ts';
 import type { Look } from './look.ts';
 import { buildRocks, buildTrees, PLAYER_COLORS, StackView } from './props.ts';
 import { buildFences, RiverView } from './terrain.ts';
+import { BONUS_COLORS, BonusView } from './bonus.ts';
+import { RainView } from './weather.ts';
+import { stackHead, stackKg } from '../sim/fire.ts';
+import { raining, rainX, rainY } from '../sim/rain.ts';
+import { trapAt } from '../sim/trap.ts';
 
 /** Уровень качества — только про картинку: правила и число кустиков от него не зависят. */
 export interface Quality {
@@ -87,6 +92,21 @@ export interface StepFx {
   foeGave: number; // кто из соперников сдал сено в ларёк (−1 — никто)
   foeAmmo: number; // кто из соперников купил патроны (−1 — никто)
   foeVest: number; // кто из соперников купил бронежилет (−1 — никто)
+
+  // Капкан, находки, пожар, дождь
+  bonusBorn: number; // на поле появилась находка: её вид (−1 — нет)
+  gotBonus: number; // сам подобрал находку: её вид (−1 — нет)
+  foeBonus: number; // кто из соперников подобрал находку (−1 — никто)
+  foeBonusKind: number; // и какую
+  trapSet: boolean; // сам взвёл капкан
+  snared: boolean; // сам попал в чужой капкан
+  caught: number; // кого поймал капкан у своего стога (−1 — никого)
+  lit: boolean; // сам поджёг чужой стог
+  stackLit: number; // кто поджёг свой стог (−1 — никто)
+  doused: boolean; // свой стог потушен
+  burning: number; // сколько кг своего стога сгорело за шаг
+  rainStart: boolean; // туча пришла на поле
+  inRain: boolean; // сам стоит под тучей
 }
 
 const BASE_VIEW = 15; // метров по высоте экрана при обычной косе
@@ -99,6 +119,9 @@ export class View {
   private readonly grass: Grass;
   private readonly heroes: HeroView[] = [];
   private readonly stacks: StackView[] = [];
+  private readonly stackOf: number[] = []; // у какого стога игрок (в команде стог общий)
+  private readonly bonusView = new BonusView();
+  private readonly rainView: RainView | null = null;
   private readonly drops: DropsView;
   private readonly shop: ShopView | null = null;
   private readonly river: RiverView | null = null;
@@ -122,6 +145,7 @@ export class View {
     gun: false,
     gunReady: false,
     armor: 0,
+    snared: false,
     flying: 0,
     down: false,
   };
@@ -201,14 +225,30 @@ export class View {
     for (let k = 0; k < game.players.length; k++) {
       const p = game.players[k]!;
       const color = this.colorOf(k);
-      const stack = new StackView(p.stackX, p.stackY, duel ? color : null);
-      this.stacks.push(stack);
-      this.scene.add(stack.group);
+      // В командной игре стог у напарников общий — рисуем его один раз, с флагом первого.
+      let shared = -1;
+      for (let j = 0; j < k && shared < 0; j++) {
+        const q = game.players[j]!;
+        if (q.stackX === p.stackX && q.stackY === p.stackY) shared = this.stackOf[j]!;
+      }
+      if (shared < 0) {
+        const stack = new StackView(p.stackX, p.stackY, duel ? color : null);
+        this.stacks.push(stack);
+        this.scene.add(stack.group);
+        shared = this.stacks.length - 1;
+      }
+      this.stackOf.push(shared);
 
       const hero = new HeroView(color, look.hayReady);
       this.heroes.push(hero);
       this.scene.add(hero.group, hero.swoosh, hero.lostLegs);
       this.lastLoad.push(p.load);
+    }
+
+    this.scene.add(this.bonusView.group);
+    if (game.rain) {
+      this.rainView = new RainView(game.rain.r);
+      this.scene.add(this.rainView.group);
     }
 
     this.resize();
@@ -284,6 +324,19 @@ export class View {
       foeGave: -1,
       foeAmmo: -1,
       foeVest: -1,
+      bonusBorn: game.bonusBorn,
+      gotBonus: me.bonus,
+      foeBonus: -1,
+      foeBonusKind: -1,
+      trapSet: me.trapSet,
+      snared: me.snaredBy >= 0,
+      caught: -1,
+      lit: me.lit >= 0,
+      stackLit: -1,
+      doused: false,
+      burning: 0,
+      rainStart: game.rain !== null && game.tick === game.rain.from,
+      inRain: false,
     };
     const field = game.field;
     const gameTime = game.tick * DT;
@@ -346,7 +399,7 @@ export class View {
       if (p.pickedKg > 0) this.bits.spawnToward(p.x, 0.3, p.y, baleX, 0.6, baleZ, 6, hay);
 
       if (p.unloadedKg > 0) {
-        this.stacks[k]!.poke();
+        this.stacks[this.stackOf[k]!]!.poke();
         if (game.tick % 2 === 0) this.bits.spawnToward(baleX, 0.5, baleZ, p.stackX, 2.3, p.stackY, 2, hay);
       }
 
@@ -359,8 +412,8 @@ export class View {
           const dx = p.x - q.stackX;
           const dy = p.y - q.stackY;
           if (dx * dx + dy * dy > reach2) continue;
-          this.stacks[j]!.poke();
-          if (j === this.me) {
+          this.stacks[this.stackOf[j]!]!.poke();
+          if (j === this.me || allies(game, me, q)) {
             fx.robbed += p.stolenKg;
             fx.robber = k;
           }
@@ -445,6 +498,28 @@ export class View {
         if (p.ammoBought > 0) fx.foeAmmo = k;
         if (p.vestBought) fx.foeVest = k;
       }
+      // Находки: вспышка там, где подобрали.
+      if (p.bonus >= 0) {
+        this.bits.burst(p.x, 0.9, p.y, 16, BONUS_COLORS[p.bonus]!);
+        if (!mine) {
+          fx.foeBonus = k;
+          fx.foeBonusKind = p.bonus;
+        }
+      }
+      // Капкан: лязг железа у ног пойманного. «Свой» стог — и у напарника.
+      const ours = allies(game, me, p);
+      if (p.snaredBy >= 0) this.bits.burst(p.x, 0.2, p.y, 12, 0xb9c2cc);
+      if (p.caught >= 0 && ours) fx.caught = p.caught;
+      // Пожар: искры и дым над горящим стогом.
+      if (p.litBy >= 0) {
+        this.bits.burst(p.stackX, 1.8, p.stackY, 26, 0xff8a1f);
+        if (ours) fx.stackLit = p.litBy;
+      }
+      if (p.fire > 0 && game.tick % 3 === 0) {
+        this.bits.burst(p.stackX, 2.2, p.stackY, 3, game.tick % 6 === 0 ? 0x5a5550 : 0xffa42e);
+      }
+      if (p.burntKg > 0 && ours) fx.burning += p.burntKg;
+      if (p.doused && ours) fx.doused = true;
       if (p.gotGun && !mine) fx.gunTaken = k;
       if (p.lostGun && !mine) fx.gunDropped = true;
 
@@ -470,6 +545,23 @@ export class View {
         if (mine) this.shake = 0.8;
       }
       this.lastLoad[k] = p.load;
+    }
+
+    // Дождь: скошенное под тучей на вид снова свежее (обновляем пять раз в секунду).
+    if (raining(game)) {
+      const rain = game.rain!;
+      const cx = rainX(game);
+      const cz = rainY(game);
+      const r2 = rain.r * rain.r;
+      fx.inRain = (me.x - cx) * (me.x - cx) + (me.y - cz) * (me.y - cz) <= r2;
+      if (game.tick % 6 === 0) {
+        for (let i = 0; i < field.count; i++) {
+          if (field.hay[i]! <= 0) continue;
+          const dx = field.x[i]! - cx;
+          const dz = field.y[i]! - cz;
+          if (dx * dx + dz * dz <= r2) this.grass.wet(i, gameTime);
+        }
+      }
     }
 
     // Собаки: укусы и подрезанные лапы.
@@ -512,6 +604,7 @@ export class View {
     pose.gun = game.gun !== null && game.gun.holder === p.id;
     pose.gunReady = pose.gun && game.gun!.ammo > 0 && scytheActive(p);
     pose.armor = p.armor;
+    pose.snared = p.snare > 0;
     pose.flying = p.fly > 0 ? 1 - p.fly / game.flyTicks : 0;
     pose.down = p.down > 0 && p.fly === 0;
     return pose;
@@ -565,7 +658,6 @@ export class View {
       const z = p.py + (p.y - p.py) * alpha;
       const dirAngle = (p.dir * DIR_STEP_DEG * Math.PI) / 180;
       this.heroes[k]!.update(x, z, dirAngle, p.speed, this.poseOf(game, p), dt, this.time);
-      this.stacks[k]!.update(p.stacked, this.time, dt);
       if (k === this.me) {
         myX = x;
         myZ = z;
@@ -574,6 +666,20 @@ export class View {
       }
     }
     const me = game.players[this.me]!;
+    // Стоги: в командной игре общий стог показывает сено обоих напарников.
+    for (let k = 0; k < game.players.length; k++) {
+      const p = game.players[k]!;
+      if (this.stackOf.indexOf(this.stackOf[k]!) !== k) continue; // этот стог уже обновлён
+      const stack = this.stacks[this.stackOf[k]!]!;
+      stack.setTrap(trapAt(game, p) !== null);
+      stack.setFire(stackHead(game, p).fire > 0);
+      stack.update(stackKg(game, p), this.time, dt);
+    }
+    this.bonusView.sync(game.bonuses, this.time);
+    if (this.rainView) {
+      const on = raining(game);
+      this.rainView.update(on, on ? rainX(game) : 0, on ? rainY(game) : 0, this.time);
+    }
     this.renderArms(game, alpha, dt);
     this.river?.update(this.time);
 
@@ -633,6 +739,8 @@ export class View {
     this.drops.dispose();
     this.groundGun?.dispose();
     this.river?.dispose();
+    this.bonusView.dispose();
+    this.rainView?.dispose();
     for (const hero of this.heroes) hero.dispose();
     this.bits.dispose();
     this.renderer.dispose();

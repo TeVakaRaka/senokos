@@ -3,6 +3,8 @@
 // и к соперникам.
 
 import { shopLeader } from '../sim/arms.ts';
+import { BONUS_BOOTS, BONUS_WHET } from '../sim/bonus.ts';
+import { stackKg } from '../sim/fire.ts';
 import { TOOL_SCYTHE, type Game } from '../sim/game.ts';
 import { levelThreshold } from '../sim/perks.ts';
 import { DT } from '../sim/tuning.ts';
@@ -25,7 +27,12 @@ interface Foe {
   kg: HTMLElement;
   lastKg: number;
   arrow: HTMLElement;
+  ally: boolean; // напарник в командной игре: стрелка есть, отдельного счёта нет
 }
+
+/** Как называются находки на экране. */
+export const BONUS_NAMES = ['Точило', 'Сапоги', 'Спички'];
+const BONUS_CSS = ['#49c2e8', '#6fd45c', '#ff7a2f'];
 
 /** «1 патрон», «3 патрона», «10 патронов». */
 export function shells(n: number): string {
@@ -95,6 +102,15 @@ export class Hud {
   private gunKey = '';
   private vestKey = -1;
   private holderKey = '';
+  private readonly bonusTag: HTMLElement;
+  private readonly bonusArrow: HTMLElement;
+  private readonly matchTag: HTMLElement;
+  private readonly effects: HTMLElement;
+  private bonusKey = -1;
+  private effectsKey = '';
+  private kennelTitle = '';
+  private team: number[] = [];
+  private squad = false; // командная игра: счёт общий на двоих
   private lastKg = -1;
   private lastSeconds = -1;
   private alarmUntil = 0;
@@ -103,8 +119,11 @@ export class Hud {
    * me — номер своего игрока; players — сколько игроков на поле; foeLabel — подпись
    * счёта соперника, когда он один («кг у бота»).
    */
-  constructor(me: number, players: number, foeLabel: string) {
+  /** team — команда каждого игрока (у напарников одинаковая). */
+  constructor(me: number, players: number, foeLabel: string, team: readonly number[] = []) {
     this.me = me;
+    for (let k = 0; k < players; k++) this.team.push(team[k] ?? k);
+    this.squad = this.team.some((t, k) => k !== me && t === this.team[me]);
     const duel = players > 1;
     this.root.classList.toggle('duel', duel);
     const foeBox = $('hud-foe');
@@ -132,6 +151,21 @@ export class Hud {
     this.holderTag.innerHTML = `${GUN_ICON}<b></b>`;
     this.holderAmmo = this.holderTag.querySelector('b')!;
     document.body.append(this.holderTag);
+    // Находка на поле: подпись над ней и стрелка к ней от края экрана. Спички у соперника —
+    // значок над ним: он идёт жечь стог.
+    this.bonusTag = document.createElement('div');
+    this.bonusTag.className = 'world-tag bonus-tag';
+    document.body.append(this.bonusTag);
+    this.bonusArrow = document.createElement('div');
+    this.bonusArrow.className = 'edge-arrow bonus';
+    this.bonusArrow.textContent = '➜';
+    this.root.before(this.bonusArrow);
+    this.matchTag = document.createElement('div');
+    this.matchTag.className = 'world-tag match-tag';
+    this.matchTag.textContent = 'спички!';
+    document.body.append(this.matchTag);
+    this.effects = $('effects');
+    this.effects.textContent = '';
     for (const el of [
       this.shopTag.root,
       this.kennelTag.root,
@@ -140,6 +174,9 @@ export class Hud {
       this.gunBadge,
       this.vestBadge,
       this.holderTag,
+      this.bonusTag,
+      this.bonusArrow,
+      this.matchTag,
     ]) {
       el.hidden = true;
     }
@@ -149,12 +186,14 @@ export class Hud {
     $('hud-stack').querySelector('.hud-stack-line')!.append(mark);
     if (!duel) return;
 
-    $('hud-stack-label').textContent = 'кг у тебя';
+    $('hud-stack-label').textContent = this.squad ? 'кг у вас' : 'кг у тебя';
     $('hud-me-dot').style.background = playerCss(me);
     foeBox.textContent = '';
-    foeBox.classList.toggle('many', players > 2);
+    let rivals = 0; // сколько у соперников отдельных счетов (в командной игре — один на двоих)
+    let shown: Foe | null = null;
     for (let k = 0; k < players; k++) {
       if (k === me) continue;
+      const ally = this.team[k] === this.team[me];
       const item = document.createElement('span');
       item.className = 'foe-item';
       const dot = document.createElement('i');
@@ -166,21 +205,40 @@ export class Hud {
       gunMark.className = 'gun-mark';
       gunMark.innerHTML = GUN_ICON;
       item.append(dot, ' ', kg, gunMark);
-      foeBox.append(item);
+      if (ally) {
+        // Напарник: его точка — рядом со своей, счёт общий.
+        const mate = document.createElement('i');
+        mate.className = 'dot';
+        mate.style.background = playerCss(k);
+        $('hud-me-dot').after(mate);
+      } else if (this.squad && shown) {
+        // Второй соперник той же команды: своя точка — к счёту первого.
+        const second = document.createElement('i');
+        second.className = 'dot';
+        second.style.background = playerCss(k);
+        shown.item.prepend(second);
+      } else {
+        foeBox.append(item);
+        rivals++;
+      }
 
-      // Стрелка к сопернику — его цвета. Кладём под плашками, чтобы не лезла поверх окон.
+      // Стрелка к сопернику — его цвета (к напарнику — такая же, но бледнее).
+      // Кладём под плашками, чтобы не лезла поверх окон.
       const arrow = document.createElement('div');
-      arrow.className = 'edge-arrow foe';
+      arrow.className = ally ? 'edge-arrow foe ally' : 'edge-arrow foe';
       arrow.textContent = '➜';
       arrow.style.background = playerCss(k);
       arrow.setAttribute('aria-hidden', 'true');
       this.root.before(arrow);
 
-      this.foes.push({ index: k, item, kg, lastKg: -1, arrow });
+      const foe: Foe = { index: k, item, kg, lastKg: -1, arrow, ally };
+      if (!ally && !shown) shown = foe;
+      this.foes.push(foe);
     }
-    if (this.foes.length === 1) {
+    foeBox.classList.toggle('many', rivals > 1);
+    if (rivals === 1) {
       const label = document.createElement('small');
-      label.textContent = ` ${foeLabel}`;
+      label.textContent = ` ${this.squad ? 'кг у них' : foeLabel}`;
       foeBox.append(label);
     }
   }
@@ -188,7 +246,8 @@ export class Hud {
   /** Дёшево: вызывать каждый кадр. Текст меняется только когда число изменилось. */
   update(game: Game, view: View): void {
     const p = game.players[this.me]!;
-    const kg = Math.floor(p.stacked);
+    // В командной игре счёт — общий стог: сено обоих напарников.
+    const kg = Math.floor(this.squad ? stackKg(game, p) : p.stacked);
     if (kg !== this.lastKg) {
       this.lastKg = kg;
       this.stackKg.textContent = String(kg);
@@ -224,7 +283,7 @@ export class Hud {
 
     for (const foe of this.foes) {
       const q = game.players[foe.index]!;
-      const foeKg = Math.floor(q.stacked);
+      const foeKg = Math.floor(this.squad ? stackKg(game, q) : q.stacked);
       if (foeKg !== foe.lastKg) {
         foe.lastKg = foeKg;
         foe.kg.textContent = String(foeKg);
@@ -307,21 +366,29 @@ export class Hud {
       shopTag.root.hidden = true;
     }
 
-    // Над своей будкой: сколько сена до собаки (пока собаки нет).
+    // Над своей будкой: что она продаёт сейчас — сначала капкан, потом собаку.
     const kennel = game.kennels[this.me];
     const kennelTag = this.kennelTag;
-    if (kennel && !game.dogs[this.me] && !game.over) {
+    if (kennel && (!p.trap || !game.dogs[this.me]) && !game.over) {
       const s = view.worldToScreen(kennel.x, 1.6, kennel.y);
       kennelTag.root.hidden = !(s.inFront && s.x > -60 && s.x < w + 60 && s.y > -40 && s.y < h + 40);
       kennelTag.root.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
       const dx = p.x - kennel.x;
       const dy = p.y - kennel.y;
       const hint = p.load > 0.05 && p.speed > 0 && dx * dx + dy * dy < t.kennelReach * t.kennelReach;
-      const key = `${Math.floor(kennel.kg)}|${hint}`;
+      const forTrap = !p.trap;
+      const have = forTrap ? kennel.trapKg : kennel.kg;
+      const price = forTrap ? t.trapKg : t.dogKg;
+      const key = `${forTrap}|${Math.floor(have)}|${hint}`;
       if (key !== kennelTag.key) {
         kennelTag.key = key;
-        kennelTag.bar.innerHTML = `<i style="width:${(kennel.kg / t.dogKg) * 100}%;background:${playerCss(this.me)}"></i>`;
-        kennelTag.text.textContent = hint ? 'остановись — сдашь сено' : `${Math.floor(kennel.kg)} из ${t.dogKg} кг сена`;
+        const title = forTrap ? 'Капкан' : 'Собака';
+        if (title !== this.kennelTitle) {
+          this.kennelTitle = title;
+          kennelTag.head.textContent = title;
+        }
+        kennelTag.bar.innerHTML = `<i style="width:${(have / price) * 100}%;background:${playerCss(this.me)}"></i>`;
+        kennelTag.text.textContent = hint ? 'остановись — сдашь сено' : `${Math.floor(have)} из ${price} кг сена`;
         kennelTag.root.classList.toggle('hint', hint);
       }
     } else {
@@ -375,6 +442,63 @@ export class Hud {
       }
     } else {
       this.holderTag.hidden = true;
+    }
+
+    // Находка на поле: ближайшая — с подписью, а если её не видно — стрелка от края экрана.
+    let near = -1;
+    let nearD2 = Infinity;
+    for (let i = 0; i < game.bonuses.length; i++) {
+      const b = game.bonuses[i]!;
+      const d2 = (b.x - p.x) * (b.x - p.x) + (b.y - p.y) * (b.y - p.y);
+      if (d2 < nearD2) {
+        nearD2 = d2;
+        near = i;
+      }
+    }
+    if (near >= 0 && !game.over) {
+      const b = game.bonuses[near]!;
+      const s = view.worldToScreen(b.x, 1.9, b.y);
+      const inside = s.inFront && s.x > 0 && s.x < w && s.y > 60 && s.y < h;
+      if (b.kind !== this.bonusKey) {
+        this.bonusKey = b.kind;
+        this.bonusTag.textContent = BONUS_NAMES[b.kind]!;
+        this.bonusTag.style.background = BONUS_CSS[b.kind]!;
+        this.bonusArrow.style.background = BONUS_CSS[b.kind]!;
+      }
+      this.bonusTag.hidden = !inside;
+      this.bonusTag.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
+      this.bonusArrow.hidden = false;
+      this.pointTo(this.bonusArrow, s.x, s.y, w, h, true);
+    } else {
+      this.bonusTag.hidden = true;
+      this.bonusArrow.hidden = true;
+    }
+
+    // Соперник со спичками идёт жечь стог — над ним значок.
+    let torch: (typeof game.players)[number] | null = null;
+    for (const q of game.players) {
+      if (q.matches && this.team[q.id] !== this.team[this.me]) torch = q;
+    }
+    if (torch && !game.over) {
+      const s = view.worldToScreen(torch.x, 3.2, torch.y);
+      this.matchTag.hidden = !(s.inFront && s.x > 0 && s.x < w && s.y > 70 && s.y < h);
+      this.matchTag.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
+    } else {
+      this.matchTag.hidden = true;
+    }
+
+    // Что сейчас действует на тебя: точило и сапоги — с обратным отсчётом, спички — пока не потрачены.
+    const sharp = game.over ? 0 : Math.ceil(p.sharp * DT);
+    const boots = game.over ? 0 : Math.ceil(p.boots * DT);
+    const effectsKey = `${sharp}|${boots}|${p.matches && !game.over}|${p.snare > 0}`;
+    if (effectsKey !== this.effectsKey) {
+      this.effectsKey = effectsKey;
+      let html = '';
+      if (p.snare > 0) html += '<span class="fx-pill bad">Капкан! Стоишь</span>';
+      if (p.matches && !game.over) html += `<span class="fx-pill" style="background:${BONUS_CSS[2]}">Спички — беги к чужому стогу</span>`;
+      if (sharp > 0) html += `<span class="fx-pill" style="background:${BONUS_CSS[BONUS_WHET]}">Точило: ${sharp} с</span>`;
+      if (boots > 0) html += `<span class="fx-pill" style="background:${BONUS_CSS[BONUS_BOOTS]}">Сапоги: ${boots} с</span>`;
+      this.effects.innerHTML = html;
     }
 
     // Свой бронежилет: сколько выстрелов он ещё выдержит.

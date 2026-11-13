@@ -29,6 +29,8 @@ export class StackView {
   readonly group = new THREE.Group();
   private readonly body = new THREE.Group();
   private readonly flag: THREE.Mesh | null = null;
+  private readonly trap = new THREE.Group();
+  private readonly flames = new THREE.Group();
   private bounce = 0;
 
   constructor(x: number, z: number, flagColor: number | null) {
@@ -58,8 +60,46 @@ export class StackView {
       this.flag.rotation.y = Math.PI / 4; // полотнищем к камере: она смотрит с угла (+x, +z)
       this.group.add(this.flag);
     }
+    // Капкан у подножия, со стороны камеры: железный круг с зубьями.
+    const iron = lambert(0x3a3f47);
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.06, 12), iron);
+    this.trap.add(plate);
+    for (let i = 0; i < 10; i++) {
+      const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 4), lambert(0xb9c2cc));
+      const a = (i / 10) * Math.PI * 2;
+      tooth.position.set(Math.cos(a) * 0.38, 0.12, Math.sin(a) * 0.38);
+      this.trap.add(tooth);
+    }
+    this.trap.position.set(1.25, 0.05, 1.25);
+    this.trap.visible = false;
+    this.group.add(this.trap);
+
+    // Огонь: языки пламени вокруг верхушки. Светятся сами, от солнца не зависят.
+    const fire = [0xff7a1a, 0xffb02e, 0xff4a1a, 0xffd34d, 0xff8f1f, 0xffc23a];
+    for (let i = 0; i < fire.length; i++) {
+      const tongue = new THREE.Mesh(
+        new THREE.ConeGeometry(0.34, 1.1, 5),
+        new THREE.MeshBasicMaterial({ color: fire[i]!, transparent: true, opacity: 0.9, depthWrite: false }),
+      );
+      const a = (i / fire.length) * Math.PI * 2;
+      tongue.position.set(Math.cos(a) * 0.6, 2.0, Math.sin(a) * 0.6);
+      this.flames.add(tongue);
+    }
+    this.flames.visible = false;
+    this.group.add(this.flames);
+
     this.group.position.set(x, 0, z);
     this.update(0, 0, 0);
+  }
+
+  /** У стога взведён капкан. */
+  setTrap(on: boolean): void {
+    this.trap.visible = on;
+  }
+
+  /** Стог горит. */
+  setFire(on: boolean): void {
+    this.flames.visible = on;
   }
 
   /** Сено ушло в стог или его тащат оттуда — стог пружинит. */
@@ -77,6 +117,17 @@ export class StackView {
     if (this.flag) {
       this.flag.position.y = 3.2 * h; // верхушка шеста
       this.flag.rotation.z = Math.sin(time * 3.1) * 0.05;
+    }
+    if (this.flames.visible) {
+      // Языки пламени пляшут: каждый дрожит по-своему и держится у верхушки стога.
+      const top = 1.2 + 1.5 * h;
+      for (let i = 0; i < this.flames.children.length; i++) {
+        const tongue = this.flames.children[i]!;
+        const flick = 0.75 + 0.45 * Math.abs(Math.sin(time * (9 + i * 1.7) + i * 2.1));
+        tongue.scale.set(w, flick * 1.25, w);
+        tongue.position.y = top * (0.55 + 0.08 * i) + 0.25 * flick;
+        tongue.rotation.z = Math.sin(time * 7 + i) * 0.18;
+      }
     }
   }
 }

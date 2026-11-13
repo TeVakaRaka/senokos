@@ -37,12 +37,18 @@ function atKennel(g: Game, p: Player, owner = p.id): void {
   place(p, k.x + (dx / len) * off, k.y + (dy / len) * off);
 }
 
-/** Купить собаку игроку id: сдать сено в будку. Потом хозяин уходит в дальний угол — не мешать. */
+/**
+ * Купить собаку игроку id: сдать сено в будку. Капкан считаем уже взведённым (иначе первые
+ * килограммы ушли бы на него), а после покупки снимаем — чтобы проверять одну только собаку.
+ * Потом хозяин уходит в дальний угол — не мешать.
+ */
 function buyDog(g: Game, id: number): Dog {
   const p = g.players[id]!;
   atKennel(g, p);
+  p.trap = true;
   p.load = g.tuning.dogKg;
   for (let i = 0; i < 60 && !g.dogs[id]; i++) step(g, 0);
+  p.trap = false;
   place(p, 3, 60);
   return g.dogs[id]!;
 }
@@ -456,25 +462,33 @@ describe('ружьё', () => {
 });
 
 describe('будка и собака', () => {
-  it('сено в свою будку: набралось — появилась собака, будка опустела', () => {
+  it('сено в свою будку: сначала капкан, потом собака; будка опустела', () => {
     const { g, a } = pair();
     const before = totalKg(g);
+    const price = g.tuning.trapKg + g.tuning.dogKg;
     atKennel(g, a);
-    a.load = g.tuning.dogKg + 5;
+    a.load = price + 5;
     let born = false;
+    let trapAt = -1;
     for (let i = 0; i < 60; i++) {
       step(g, 0);
-      if (a.dogBorn) born = true;
+      if (a.trapSet) trapAt = i;
+      if (a.dogBorn) {
+        born = true;
+        expect(trapAt).toBeGreaterThanOrEqual(0); // капкан — раньше собаки
+      }
     }
+    expect(a.trap).toBe(true);
     expect(born).toBe(true);
     expect(g.dogs[0]).not.toBeNull();
     expect(g.dogs[1]).toBeNull();
     expect(g.kennels[0]!.kg).toBe(0);
-    expect(g.spentKg).toBeCloseTo(g.tuning.dogKg, 9);
+    expect(g.kennels[0]!.trapKg).toBe(0);
+    expect(g.spentKg).toBeCloseTo(price, 9);
     expect(a.load).toBeCloseTo(5, 9);
-    expect(a.delivered).toBeCloseTo(g.tuning.dogKg, 9);
+    expect(a.delivered).toBeCloseTo(price, 9);
     expect(a.stacked).toBe(0);
-    expect(totalKg(g)).toBeCloseTo(before + g.tuning.dogKg + 5, 9);
+    expect(totalKg(g)).toBeCloseTo(before + price + 5, 9);
     // Пока собака жива, будка сено не берёт.
     run(g, 0, 20);
     expect(a.load).toBeCloseTo(5, 9);
@@ -483,6 +497,7 @@ describe('будка и собака', () => {
   it('на ходу сено в будку не уходит: надо остановиться', () => {
     const { g, a } = pair();
     atKennel(g, a);
+    a.trap = true; // капкан уже взведён — сено пойдёт на собаку
     a.load = 10;
     const k = g.kennels[0]!;
     run(g, dirFromVector(k.x - a.x, k.y - a.y) + 1, 12); // идёт прямо на будку

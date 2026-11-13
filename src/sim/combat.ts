@@ -17,14 +17,24 @@ export function onFeet(p: Player): boolean {
   return p.crawl === 0 && p.down === 0;
 }
 
+/** Может действовать: на ногах и не стоит в капкане. */
+export function acting(p: Player): boolean {
+  return p.crawl === 0 && p.down === 0 && p.snare === 0;
+}
+
+/** Свои: одна команда. В игре «все против всех» у каждого команда своя. */
+export function allies(g: Game, a: Player, b: Player): boolean {
+  return g.team[a.id] === g.team[b.id];
+}
+
 /** Работает ли сейчас коса у игрока. */
 export function scytheActive(p: Player): boolean {
-  return onFeet(p) && p.toolCd === 0 && !fleeing(p) && (p.tool === TOOL_SCYTHE || p.d.combo);
+  return acting(p) && p.toolCd === 0 && !fleeing(p) && (p.tool === TOOL_SCYTHE || p.d.combo);
 }
 
 /** Работают ли сейчас грабли у игрока. */
 export function rakeActive(p: Player): boolean {
-  return onFeet(p) && p.toolCd === 0 && (p.tool === TOOL_RAKE || p.d.combo);
+  return acting(p) && p.toolCd === 0 && (p.tool === TOOL_RAKE || p.d.combo);
 }
 
 /** Ружьё у этого игрока. */

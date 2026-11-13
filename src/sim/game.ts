@@ -9,14 +9,27 @@
 // dog.ts); забор закрывает от косы, выстрела и укуса (world.ts).
 
 import { shoot, pickGun, type Gun, type Shop, type ShotEvent } from './arms.ts';
-import { fleeing, hitLegs, knockHay, onFeet, rakeActive, scytheActive, TOOL_RAKE, TOOL_SCYTHE } from './combat.ts';
+import { pickBonus, spawnBonuses, type Bonus, type BonusPlan } from './bonus.ts';
+import { acting, allies, fleeing, hitLegs, knockHay, rakeActive, scytheActive, TOOL_RAKE, TOOL_SCYTHE } from './combat.ts';
 import { DIR_COUNT, DIR_X, DIR_Y } from './dirs.ts';
 import { cosDeg } from './dmath.ts';
 import { cutDog, DOG_RADIUS, stepDogs, type Dog, type Kennel } from './dog.ts';
 import { cellCoord, standingWithin, type Field } from './field.ts';
-import { fieldSizeFor, generateLevel, KENNEL_RADIUS, SHOP_RADIUS, STACK_RADIUS, type Point, type River, type Rock } from './gen.ts';
+import {
+  fieldSizeFor,
+  generateLevel,
+  KENNEL_RADIUS,
+  SHOP_RADIUS,
+  STACK_RADIUS,
+  type Point,
+  type RainPlan,
+  type River,
+  type Rock,
+} from './gen.ts';
 import { buildNav, type Nav, type Wall } from './nav.ts';
+import { arson, burn } from './fire.ts';
 import { pickDrops, raid, rake, unload, type Drop } from './hay.ts';
+import { soak, type Rain } from './rain.ts';
 import { applyChoice, checkLevel, CHOICE_BASE, derive, OFFER_SIZE, PERK_COUNT, type Derived } from './perks.ts';
 import { Rng } from './rng.ts';
 import { cloneTuning, DEFAULT_TUNING, DT, TICK_RATE, type Tuning } from './tuning.ts';
@@ -27,7 +40,9 @@ export type { Gun, Shop, ShotEvent } from './arms.ts';
 export type { Dog, Kennel } from './dog.ts';
 export type { Bridge, River } from './gen.ts';
 export type { Wall } from './nav.ts';
-export { fleeing, onFeet, rakeActive, scytheActive, TOOL_RAKE, TOOL_SCYTHE } from './combat.ts';
+export type { Bonus } from './bonus.ts';
+export type { Rain } from './rain.ts';
+export { acting, allies, fleeing, onFeet, rakeActive, scytheActive, TOOL_RAKE, TOOL_SCYTHE } from './combat.ts';
 
 const FLY_TICKS = 8; // сколько шагов летит подстреленный
 const DOG_SHIELD_TICKS = 30; // столько шагов после того, как встала, собаку нельзя подрезать снова
@@ -71,6 +86,13 @@ export interface Player {
   down: number; // шагов лежит после выстрела: не двигается и ничего не делает
   still: number; // сколько шагов подряд стоит на месте (сено в ларёк и будку сдаётся только стоя)
   armor: number; // сколько выстрелов ещё выдержит бронежилет (0 — его нет)
+  trap: boolean; // у его стога взведён капкан
+  snare: number; // шагов ещё стоит в чужом капкане
+  sharp: number; // шагов ещё действует точило: коса бьёт чаще
+  boots: number; // шагов ещё действуют сапоги: бег быстрее
+  matches: boolean; // при нём спички: подойдёт к чужому стогу — подожжёт
+  fire: number; // шагов ещё гореть его стогу (огонь числится на одном из напарников)
+  burnt: number; // кг его сена, сгоревших за день
   fly: number; // шагов ещё летит, отброшенный выстрелом
   flyX: number; // смещение за шаг, пока летит
   flyY: number;
@@ -130,6 +152,14 @@ export interface Player {
   vestBought: boolean; // на этом шаге купил бронежилет
   armorHitBy: number; // чей выстрел на этом шаге принял его бронежилет; −1 — ничей
   dryFire: boolean; // на этом шаге щёлкнул пустым ружьём
+  trapSet: boolean; // на этом шаге взвёл капкан у своего стога
+  snaredBy: number; // в чей капкан попал на этом шаге; −1 — ни в чей
+  caught: number; // кого поймал его капкан на этом шаге; −1 — никого
+  bonus: number; // какую находку подобрал на этом шаге (BONUS_*); −1 — никакой
+  lit: number; // чей стог поджёг на этом шаге; −1 — ничей
+  litBy: number; // кто поджёг его стог на этом шаге; −1 — никто
+  doused: boolean; // на этом шаге потушил стог
+  burntKg: number; // сколько его сена сгорело на этом шаге
   /** Сколько ударов ещё требует трава прямо по курсу (0 — травы впереди нет). */
   needAhead: number;
 }
@@ -154,6 +184,9 @@ export interface Game {
   dogBiteTicks: number; // сколько шагов между укусами
   dogCrawlTicks: number; // сколько шагов ползает подрезанная собака
   dogShieldTicks: number; // сколько шагов после этого её нельзя подрезать
+  snareTicks: number; // сколько шагов держит капкан
+  bonusTicks: number; // сколько шагов действуют точило и сапоги
+  fireTicks: number; // сколько шагов горит стог, если не тушить
   over: boolean; // день окончен
   rng: Rng;
 
@@ -170,7 +203,14 @@ export interface Game {
   gun: Gun | null; // ружьё; null — ещё не вышло из магазина
   kennels: Kennel[]; // будка у стога каждого игрока (в игре на одного — нет)
   dogs: (Dog | null)[]; // собака каждого игрока; null — нет
-  spentKg: number; // сено, ушедшее на покупки: собаки, патроны, бронежилеты
+  spentKg: number; // сено, ушедшее на покупки: собаки, патроны, бронежилеты, капканы
+  team: number[]; // команда каждого игрока; «все против всех» — у каждого своя
+  bonuses: Bonus[]; // находки, которые лежат на поле
+  bonusPlan: BonusPlan[]; // расписание находок (из зерна)
+  bonusNext: number; // сколько строк расписания уже сработало
+  bonusBorn: number; // событие шага: какая находка появилась (BONUS_*); −1 — никакая
+  rain: Rain | null; // туча этого дня
+  burntKg: number; // сколько сена сгорело в стогах
 
   // Общие буферы событий шага (у каждого игрока в них свой отрезок).
   cutIdx: Int32Array;
@@ -182,11 +222,11 @@ export interface Game {
 /**
  * Новый день. map — вид поля (MAP_* из gen.ts); если не задан, его выбирает зерно.
  */
-export function createGame(seed: number, tuning: Tuning = DEFAULT_TUNING, playerCount = 1, map = -1): Game {
+export function createGame(seed: number, tuning: Tuning = DEFAULT_TUNING, playerCount = 1, map = -1, teams = false): Game {
   const t = cloneTuning(tuning);
   // Чем больше игроков, тем больше поле: места и травы должно хватать всем.
   t.fieldSize = fieldSizeFor(t.fieldSize, playerCount, t.pvpFieldScale);
-  const level = generateLevel(seed, t, playerCount, map);
+  const level = generateLevel(seed, t, playerCount, map, teams);
   const discs = [
     ...level.stacks.map((s) => ({ x: s.x, y: s.y, r: STACK_RADIUS })),
     ...level.rocks,
@@ -213,6 +253,9 @@ export function createGame(seed: number, tuning: Tuning = DEFAULT_TUNING, player
     dogBiteTicks: Math.max(1, Math.round(t.dogBitePeriod * TICK_RATE)),
     dogCrawlTicks: Math.max(1, Math.round(t.dogCrawlTime * TICK_RATE)),
     dogShieldTicks: DOG_SHIELD_TICKS,
+    snareTicks: Math.max(1, Math.round(t.trapTime * TICK_RATE)),
+    bonusTicks: Math.max(1, Math.round(t.bonusTime * TICK_RATE)),
+    fireTicks: Math.max(1, Math.round(t.fireTime * TICK_RATE)),
     over: false,
     rng: new Rng((seed ^ 0x51ed270b) >>> 0),
     field: level.field,
@@ -239,9 +282,16 @@ export function createGame(seed: number, tuning: Tuning = DEFAULT_TUNING, player
         }
       : null,
     gun: null,
-    kennels: level.kennels.map((k) => ({ x: k.x, y: k.y, kg: 0 })),
+    kennels: level.kennels.map((k) => ({ x: k.x, y: k.y, kg: 0, trapKg: 0 })),
     dogs: level.kennels.map(() => null),
     spentKg: 0,
+    team: level.team,
+    bonuses: [],
+    bonusPlan: level.bonuses.map((b) => ({ tick: Math.round(b.at * TICK_RATE), kind: b.kind, x: b.x, y: b.y })),
+    bonusNext: 0,
+    bonusBorn: -1,
+    rain: level.rain ? rainOf(level.rain, t) : null,
+    burntKg: 0,
     cutIdx: new Int32Array(4096),
     cutCount: 0,
     rakeIdx: new Int32Array(4096),
@@ -252,6 +302,21 @@ export function createGame(seed: number, tuning: Tuning = DEFAULT_TUNING, player
   }
   for (const p of g.players) placeYesterdayHay(g, p);
   return g;
+}
+
+/** Туча из плана уровня: секунды и метры — в шаги и смещение за шаг. */
+function rainOf(plan: RainPlan, t: Tuning): Rain {
+  const stride = t.rainSpeed * DT;
+  const from = Math.round(plan.at * TICK_RATE);
+  return {
+    x0: plan.x0,
+    y0: plan.y0,
+    vx: plan.dirX * stride,
+    vy: plan.dirY * stride,
+    r: t.rainRadius,
+    from,
+    to: from + Math.ceil(plan.length / stride),
+  };
 }
 
 function newPlayer(id: number, start: Point, stack: Point, t: Tuning): Player {
@@ -274,6 +339,13 @@ function newPlayer(id: number, start: Point, stack: Point, t: Tuning): Player {
     down: 0,
     still: 0,
     armor: 0,
+    trap: false,
+    snare: 0,
+    sharp: 0,
+    boots: 0,
+    matches: false,
+    fire: 0,
+    burnt: 0,
     fly: 0,
     flyX: 0,
     flyY: 0,
@@ -327,6 +399,14 @@ function newPlayer(id: number, start: Point, stack: Point, t: Tuning): Player {
     vestBought: false,
     armorHitBy: -1,
     dryFire: false,
+    trapSet: false,
+    snaredBy: -1,
+    caught: -1,
+    bonus: -1,
+    lit: -1,
+    litBy: -1,
+    doused: false,
+    burntKg: 0,
     needAhead: 0,
   };
 }
@@ -410,7 +490,16 @@ export function step(g: Game, inputs: number | readonly number[]): void {
     p.vestBought = false;
     p.armorHitBy = -1;
     p.dryFire = false;
+    p.trapSet = false;
+    p.snaredBy = -1;
+    p.caught = -1;
+    p.bonus = -1;
+    p.lit = -1;
+    p.litBy = -1;
+    p.doused = false;
+    p.burntKg = 0;
   }
+  g.bonusBorn = -1;
   for (let i = 0; i < g.dogs.length; i++) {
     const dog = g.dogs[i];
     if (!dog) continue;
@@ -447,6 +536,9 @@ export function step(g: Game, inputs: number | readonly number[]): void {
     if (p.crawl > 0) p.crawl--;
     if (p.shield > 0) p.shield--;
     if (p.down > 0) p.down--;
+    if (p.snare > 0) p.snare--;
+    if (p.sharp > 0) p.sharp--;
+    if (p.boots > 0) p.boots--;
     // Смена инструмента: пока меняет, не работает ни коса, ни грабли.
     if ((raw & INPUT_SWAP) !== 0 && p.toolCd === 0 && !p.d.combo) {
       p.tool = p.tool === TOOL_SCYTHE ? TOOL_RAKE : TOOL_SCYTHE;
@@ -478,13 +570,17 @@ export function step(g: Game, inputs: number | readonly number[]): void {
   }
   if (n > 1) separate(g);
 
-  // 5. Упавшие тюки и ружьё (подбираются с любым инструментом), грабли: сухое сено с поля
-  // и сено из чужого стога; тюк — в свой стог, в магазин или в будку.
+  // 5. Упавшие тюки, ружьё и находки (подбираются с любым инструментом), спички — к чужому
+  // стогу, грабли: сухое сено с поля и сено из чужого стога; тюк — в свой стог, в ларёк
+  // или в будку.
+  spawnBonuses(g);
   for (let k = 0; k < n; k++) {
     const p = players[(first + k) % n]!;
-    if (onFeet(p)) {
+    if (acting(p)) {
       pickDrops(g, p);
       pickGun(g, p);
+      pickBonus(g, p);
+      if (n > 1) arson(g, p);
     }
     if (rakeActive(p)) {
       rake(g, p);
@@ -494,7 +590,11 @@ export function step(g: Game, inputs: number | readonly number[]): void {
     if (p.unloadedKg > 0 || p.shopKg > 0 || p.kennelKg > 0) checkLevel(g, p);
   }
 
-  // 6. Конец дня.
+  // 6. Пожар и дождь: горящие стоги теряют сено, скошенное под тучей мокнет.
+  if (n > 1) burn(g);
+  soak(g);
+
+  // 7. Конец дня.
   if (g.tick >= g.dayTicks) g.over = true;
 }
 
@@ -521,7 +621,7 @@ function move(g: Game, p: Player, moving: boolean): void {
     p.speed = 0;
     return;
   }
-  if (!moving || p.down > 0) {
+  if (!moving || p.down > 0 || p.snare > 0) {
     p.speed = 0;
     return;
   }
@@ -530,11 +630,13 @@ function move(g: Game, p: Player, moving: boolean): void {
   // С косой в руках косарь чуть медленнее, чем с граблями.
   let target = t.runSpeed * (1 - (t.carrySlow * p.load) / p.d.carryCap);
   if (p.tool === TOOL_SCYTHE && !p.d.combo) target *= t.scytheSpeed;
+  if (p.boots > 0) target *= t.bootsSpeed;
   // Первый удар только ранит: полторы секунды раненый бежит рывком — есть шанс уйти.
   if (fleeing(p)) target *= t.woundBoost;
   if (standingWithin(g.field, p.x, p.y, t.wadeRadius)) target *= t.wadeFactor;
   if (p.needAhead > 0) {
-    const pace = p.d.mowSpeed / p.needAhead;
+    // С точилом коса бьёт чаще — и шаг косаря по траве быстрее во столько же раз.
+    const pace = (p.sharp > 0 ? p.d.mowSpeed / t.sharpRate : p.d.mowSpeed) / p.needAhead;
     if (pace < target) target = pace;
   }
   if (p.crawl > 0) target *= t.crawlFactor;
@@ -652,7 +754,7 @@ function scythe(g: Game, p: Player): void {
     const reach = d.reach + g.tuning.heroRadius;
     for (let k = 0; k < g.players.length; k++) {
       const q = g.players[k]!;
-      if (q === p || q.shield > 0) continue;
+      if (allies(g, p, q) || q.shield > 0) continue;
       const dx = q.x - p.x;
       const dy = q.y - p.y;
       const dist2 = dx * dx + dy * dy;
@@ -676,7 +778,7 @@ function scythe(g: Game, p: Player): void {
     const reach = d.reach + DOG_RADIUS;
     for (let k = 0; k < g.dogs.length; k++) {
       const dog = g.dogs[k];
-      if (!dog || dog.owner === p.id || dog.crawl > 0 || dog.shield > 0) continue;
+      if (!dog || allies(g, p, g.players[dog.owner]!) || dog.crawl > 0 || dog.shield > 0) continue;
       const dx = dog.x - p.x;
       const dy = dog.y - p.y;
       const dist2 = dx * dx + dy * dy;
@@ -690,7 +792,7 @@ function scythe(g: Game, p: Player): void {
   }
 
   if (ready && (hit > 0 || victim >= 0 || dogHit >= 0)) {
-    p.swingCd = d.swingTicks;
+    p.swingCd = p.sharp > 0 ? Math.max(1, Math.round(d.swingTicks * g.tuning.sharpRate)) : d.swingTicks;
     p.swings++;
     p.cutTufts += cut;
     p.cutKg += kg;

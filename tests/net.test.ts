@@ -561,6 +561,31 @@ describe('сервер игры по сети', () => {
     expect(clients.every((c) => c.starts[0]!.players === 3)).toBe(true);
   });
 
+  it('команды 2×2 включает тот, кто начинает, и только вчетвером; сервер говорит, что умеет это', async () => {
+    const teamsOf = async (name: string, n: number, teams: boolean): Promise<boolean[]> => {
+      const clients: Client[] = [];
+      const got: boolean[] = [];
+      for (let i = 0; i < n; i++) {
+        const c = connect(name);
+        const before = c.link.events.start!;
+        c.link.events.start = (seed, you, players, delay, direct, flag) => {
+          got[you] = flag;
+          before(seed, you, players, delay, direct, flag);
+        };
+        clients.push(c);
+        await until(() => c.rooms.length > 0 && room(c).count === i + 1);
+      }
+      clients[0]!.link.go(teams);
+      await until(() => clients.every((c) => c.starts.length === 1));
+      return got;
+    };
+    expect(await teamsOf('squads', 4, true)).toEqual([true, true, true, true]);
+    expect(await teamsOf('free', 4, false)).toEqual([false, false, false, false]);
+    expect(await teamsOf('trio', 3, true)).toEqual([false, false, false]); // втроём команд нет
+    const ping = (await (await fetch(`http://127.0.0.1:${server.port}/api/ping`)).json()) as { teams?: boolean };
+    expect(ping.teams).toBe(true);
+  });
+
   it('ввод и хеши пересылаются всем остальным, а не себе и не в чужую комнату', async () => {
     const [a, b, c] = (await party('relay', 3)) as [Client, Client, Client];
     const outsider = connect('other');

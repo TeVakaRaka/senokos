@@ -244,7 +244,8 @@ describe('локации', () => {
       // Зерно 1 — огороды, 2 — река.
       const { game } = autoplay(seed, Infinity, DEFAULT_TUNING, 2);
       expect(game.map).toBe(mapFor(seed, 2));
-      for (const p of game.players) expect(p.stacked + p.stolen).toBeGreaterThan(15);
+      // Сено везут — в стог, в ларёк или в будку: «привезённое» растёт у обоих.
+      for (const p of game.players) expect(p.delivered).toBeGreaterThan(30);
     }
   });
 

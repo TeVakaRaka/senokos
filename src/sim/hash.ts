@@ -41,6 +41,13 @@ export function hashGame(g: Game): number {
     h = mixNumber(h, p.down);
     h = mixNumber(h, p.still);
     h = mixNumber(h, p.armor);
+    h = mixNumber(h, p.trap ? 1 : 0);
+    h = mixNumber(h, p.snare);
+    h = mixNumber(h, p.sharp);
+    h = mixNumber(h, p.boots);
+    h = mixNumber(h, p.matches ? 1 : 0);
+    h = mixNumber(h, p.fire);
+    h = mixNumber(h, p.burnt);
     h = mixNumber(h, p.fly);
     h = mixNumber(h, p.flyX);
     h = mixNumber(h, p.flyY);
@@ -95,7 +102,19 @@ export function hashGame(g: Game): number {
     h = mixNumber(h, g.gun.ammo);
   }
   h = mixNumber(h, g.spentKg);
-  for (let k = 0; k < g.kennels.length; k++) h = mixNumber(h, g.kennels[k]!.kg);
+  for (let k = 0; k < g.kennels.length; k++) {
+    h = mixNumber(h, g.kennels[k]!.kg);
+    h = mixNumber(h, g.kennels[k]!.trapKg);
+  }
+  h = mixNumber(h, g.burntKg);
+  h = mixNumber(h, g.bonusNext);
+  for (let k = 0; k < g.bonuses.length; k++) {
+    const b = g.bonuses[k]!;
+    h = mixNumber(h, b.id);
+    h = mixNumber(h, b.kind);
+    h = mixNumber(h, b.x);
+    h = mixNumber(h, b.y);
+  }
   for (let k = 0; k < g.dogs.length; k++) {
     const dog = g.dogs[k];
     if (!dog) {

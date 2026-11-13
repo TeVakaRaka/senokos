@@ -38,6 +38,7 @@
 
     <div id="gun-badge" hidden></div>
     <div id="vest-badge" hidden></div>
+    <div id="effects"></div>
     <button id="tool" type="button" aria-label="Сменить инструмент: коса или грабли" hidden>
       <span class="tool-cell" data-tool="0">
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -72,11 +73,16 @@
           Против бота
           <small>подрежь ему ноги, утащи сено из стога, купи ружьё и собаку</small>
         </button>
+        <button id="play-teams" class="play" type="button">
+          2×2 с ботами
+          <small>ты и бот-напарник против двух ботов, стог общий</small>
+        </button>
         <button id="play-net" class="play" type="button" hidden>
           С друзьями
           <small>до четырёх игроков по сети: друзья открывают этот же адрес</small>
         </button>
       </div>
+      <button id="overlay-teams" class="play" type="button" hidden>Команды 2×2: нет</button>
       <button id="overlay-start" class="play primary" type="button" hidden>Начать игру</button>
       <button id="overlay-share" class="play" type="button" hidden>Позвать друзей</button>
       <button id="overlay-action" class="play" type="button" hidden>Обновить</button>

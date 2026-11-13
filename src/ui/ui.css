@@ -1224,3 +1224,71 @@ body {
     opacity: 0;
   }
 }
+
+/* Находка на поле: подпись и стрелка к ней */
+.bonus-tag {
+  min-width: 0;
+  padding: 4px 10px;
+  color: #17202a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.edge-arrow.bonus {
+  color: #17202a;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.85), 0 3px 10px rgba(0, 0, 0, 0.3);
+}
+
+.edge-arrow.bonus[hidden] {
+  display: none;
+}
+
+/* Стрелка к напарнику — бледнее, чем к сопернику */
+.edge-arrow.foe.ally {
+  opacity: 0.55 !important;
+  transform-origin: center;
+  filter: saturate(0.7);
+}
+
+/* Спички у соперника */
+.match-tag {
+  min-width: 0;
+  padding: 3px 9px;
+  background: #ff7a2f;
+  color: #201208;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 2px rgba(179, 38, 30, 0.85);
+}
+
+/* Что сейчас действует на игрока: точило, сапоги, спички, капкан */
+#effects {
+  position: fixed;
+  left: calc(var(--safe-left) + 14px);
+  bottom: calc(var(--safe-bottom) + 208px);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.fx-pill {
+  padding: 5px 10px;
+  border-radius: 13px;
+  background: #fbf6e3;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  color: #17202a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.fx-pill.bad {
+  background: #b3261e;
+  color: #fff;
+}
+
+/* Пока открыто меню или итоги, подписи над полем не должны просвечивать сквозь них */
+body:has(#overlay:not([hidden])) :is(.world-tag, .edge-arrow, #gun-badge, #vest-badge, #effects, .pop) {
+  visibility: hidden;
+}

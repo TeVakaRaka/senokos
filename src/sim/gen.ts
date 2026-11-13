@@ -6,6 +6,8 @@
 //   река     — поперёк поля течёт река, перейти можно только по мостам; ларёк стоит
 //              на широком мосту посередине.
 
+import { BONUS_KINDS } from './bonus.ts';
+import { DIR_COUNT, DIR_X, DIR_Y } from './dirs.ts';
 import { cosDeg, sinDeg } from './dmath.ts';
 import { buildField, GRASS_COUCH, GRASS_MEADOW, type Field } from './field.ts';
 import { buildNav, reachable, segDist2, type Disc, type Wall } from './nav.ts';
@@ -57,6 +59,27 @@ export interface Level {
   kennels: Point[]; // будка у стога каждого игрока (в игре на одного их нет)
   walls: Wall[]; // заборы и вода: непроходимые отрезки с толщиной
   river: River | null;
+  team: number[]; // команда каждого игрока (в игре «все против всех» у каждого своя)
+  bonuses: BonusSpot[]; // расписание находок (в игре на одного их нет)
+  rain: RainPlan | null; // когда и как над полем пройдёт туча
+}
+
+/** Находка по расписанию: на какой секунде дня, что и где появится. */
+export interface BonusSpot {
+  at: number;
+  kind: number;
+  x: number;
+  y: number;
+}
+
+/** Путь тучи: с какой секунды, откуда, куда (единичный вектор) и сколько метров летит. */
+export interface RainPlan {
+  at: number;
+  x0: number;
+  y0: number;
+  dirX: number;
+  dirY: number;
+  length: number;
 }
 
 export const STACK_RADIUS = 1.3; // стог как препятствие, м
@@ -94,10 +117,14 @@ function riverX(size: number, y: number): number {
   return size / 2 + 1.3 * sinDeg(((y - size / 2) / size) * 360);
 }
 
-export function generateLevel(seed: number, t: Tuning, playerCount = 1, mapOverride = -1): Level {
+export function generateLevel(seed: number, t: Tuning, playerCount = 1, mapOverride = -1, teams = false): Level {
   const size = t.fieldSize;
   const rng = new Rng((seed ^ 0x9e3779b9) >>> 0);
   const map = mapOverride >= 0 ? mapOverride : mapFor(seed, playerCount);
+  // Команды 2×2: игроки 0 и 2 против 1 и 3, у каждой команды общий стог.
+  const squads = teams && playerCount === 4;
+  const team: number[] = [];
+  for (let i = 0; i < playerCount; i++) team.push(squads ? i % 2 : i);
 
   // Стоги. Один игрок — стог в средней части поля. Несколько — по кругу вокруг центра,
   // друг напротив друга. У реки круг повёрнут так, чтобы ни один стог не встал у воды.
@@ -106,6 +133,12 @@ export function generateLevel(seed: number, t: Tuning, playerCount = 1, mapOverr
     const x = size / 2 + rng.range(-4, 4);
     const y = size / 2 + rng.range(-4, 4);
     stacks.push({ x, y });
+  } else if (squads) {
+    // Два общих стога — друг напротив друга, как в игре вдвоём (у реки — на разных берегах).
+    const ring = size * 0.27;
+    const west = { x: size / 2 - ring + rng.range(-1, 1), y: size / 2 + rng.range(-2.5, 2.5) };
+    const east = { x: size / 2 + ring + rng.range(-1, 1), y: size / 2 + rng.range(-2.5, 2.5) };
+    stacks.push(west, east, west, east);
   } else {
     const ring = size * 0.25;
     const base = map === MAP_RIVER && playerCount === 4 ? 135 : 180;
@@ -126,8 +159,8 @@ export function generateLevel(seed: number, t: Tuning, playerCount = 1, mapOverr
     }
   }
 
-  // Игрок стартует рядом со своим стогом, на голой площадке.
-  const starts: Point[] = stacks.map((s) => ({ x: s.x + 1.9, y: s.y + 1.9 }));
+  // Игрок стартует рядом со своим стогом, на голой площадке (напарник — с другой стороны).
+  const starts: Point[] = stacks.map((s, i) => ({ x: s.x + 1.9, y: s.y + (squads && i >= 2 ? -1.9 : 1.9) }));
 
   // Магазин — в центре поля. Будка — сбоку от своего стога (поперёк направления на центр):
   // так к ней можно подойти от магазина, не задев стог, иначе тюк ушёл бы в стог по дороге.
@@ -135,15 +168,18 @@ export function generateLevel(seed: number, t: Tuning, playerCount = 1, mapOverr
   const shop: Point | null = playerCount > 1 ? { x: size / 2, y: size / 2 } : null;
   const kennels: Point[] = [];
   if (shop) {
-    for (const s of stacks) {
+    for (let i = 0; i < stacks.length; i++) {
+      const s = stacks[i]!;
       const dx = s.x - shop.x;
       const dy = s.y - shop.y;
       const len = Math.sqrt(dx * dx + dy * dy);
       const ux = len > 1e-6 ? dx / len : -1;
       const uy = len > 1e-6 ? dy / len : 0;
-      let kx = s.x - uy * KENNEL_OFFSET;
-      let ky = s.y + ux * KENNEL_OFFSET;
-      if (map === MAP_RIVER) {
+      // У общего стога будки напарников — по разные стороны от него.
+      const side = squads && i >= 2 ? -1 : 1;
+      let kx = s.x - uy * KENNEL_OFFSET * side;
+      let ky = s.y + ux * KENNEL_OFFSET * side;
+      if (map === MAP_RIVER && !squads) {
         const ox = s.x + uy * KENNEL_OFFSET;
         const oy = s.y - ux * KENNEL_OFFSET;
         if (Math.abs(ox - riverX(size, oy)) > Math.abs(kx - riverX(size, ky))) {
@@ -279,7 +315,78 @@ export function generateLevel(seed: number, t: Tuning, playerCount = 1, mapOverr
     }
   }
 
-  return { field: buildField(size, xs, ys, types, hps), map, stacks, starts, rocks, shop, kennels, walls, river };
+  // Расписание находок: что, когда и где появится на поле. Только в игре на нескольких.
+  const bonuses: BonusSpot[] = [];
+  if (playerCount > 1 && t.bonusEvery > 0) {
+    const base = rng.int(BONUS_KINDS);
+    let n = 0;
+    for (let at = t.bonusFirst; at < t.dayLength - 15; at += t.bonusEvery) {
+      const spot = bonusSpot(rng, size, stacks, kennels, shop, rocks, walls);
+      if (spot) bonuses.push({ at, kind: (base + n) % BONUS_KINDS, x: spot.x, y: spot.y });
+      n++;
+    }
+  }
+
+  // Туча: в какой момент дня и по какой прямой она пройдёт над полем.
+  let rain: RainPlan | null = null;
+  if (t.rainRadius > 0) {
+    const at = rng.range(t.rainFrom, t.rainTo);
+    const dir = rng.int(DIR_COUNT);
+    const px = rng.range(0.3, 0.7) * size;
+    const py = rng.range(0.3, 0.7) * size;
+    const half = size * 0.75 + t.rainRadius;
+    rain = { at, x0: px - DIR_X[dir]! * half, y0: py - DIR_Y[dir]! * half, dirX: DIR_X[dir]!, dirY: DIR_Y[dir]!, length: half * 2 };
+  }
+
+  return {
+    field: buildField(size, xs, ys, types, hps),
+    map,
+    stacks,
+    starts,
+    rocks,
+    shop,
+    kennels,
+    walls,
+    river,
+    team,
+    bonuses,
+    rain,
+  };
+}
+
+/**
+ * Место для находки: свободное, не вплотную к стогам, будкам, ларьку, камням, заборам и воде.
+ * И честное — не под боком у одного из стогов (сначала пробуем строго, потом как получится).
+ */
+function bonusSpot(
+  rng: Rng,
+  size: number,
+  stacks: Point[],
+  kennels: Point[],
+  shop: Point | null,
+  rocks: Rock[],
+  walls: Wall[],
+): Point | null {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const x = rng.range(4, size - 4);
+    const y = rng.range(4, size - 4);
+    let ok = true;
+    let near = Infinity;
+    let far = 0;
+    for (const s of stacks) {
+      const d = Math.sqrt(dist2(x, y, s.x, s.y));
+      if (d < STACK_RADIUS + 3.5) ok = false;
+      if (d < near) near = d;
+      if (d > far) far = d;
+    }
+    if (attempt < 40 && far > near * 1.7) ok = false;
+    if (shop && dist2(x, y, shop.x, shop.y) < (SHOP_RADIUS + 2) * (SHOP_RADIUS + 2)) ok = false;
+    for (const k of kennels) if (dist2(x, y, k.x, k.y) < 2.5 * 2.5) ok = false;
+    for (const rock of rocks) if (dist2(x, y, rock.x, rock.y) < (rock.r + 1) * (rock.r + 1)) ok = false;
+    for (const w of walls) if (segDist2(x, y, w) < (w.r + 1) * (w.r + 1)) ok = false;
+    if (ok) return { x, y };
+  }
+  return null;
 }
 
 /** Река с тремя мостами: широким посередине (на нём ларёк) и двумя узкими ближе к краям. */

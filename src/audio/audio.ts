@@ -12,6 +12,8 @@ const RAKE_FILES = 8;
 export class Sound {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  private lastCrackleAt = 0;
+  private lastRainAt = 0;
   private swings: AudioBuffer[] = [];
   private rakes: AudioBuffer[] = [];
   private lastSwing = -1;
@@ -141,6 +143,40 @@ export class Sound {
     this.tone(196, 0, 0.3, 0.22, 'triangle');
     this.tone(523.25, 0.01, 0.22, 0.12, 'square');
     this.tone(784, 0.02, 0.4, 0.08, 'sine');
+  }
+
+  /** Капкан захлопнулся: лязг железа. */
+  snap(): void {
+    if (!this.running()) return;
+    this.noise(0.04, 0.5, 4200, 'highpass');
+    this.tone(220, 0, 0.18, 0.25, 'square');
+    this.tone(330, 0.015, 0.25, 0.16, 'triangle');
+  }
+
+  /** Подобрал находку: короткий восходящий перезвон. */
+  pickup(): void {
+    if (!this.running()) return;
+    this.tone(880, 0, 0.14, 0.08, 'triangle');
+    this.tone(1174.66, 0.06, 0.16, 0.08, 'triangle');
+    this.tone(1567.98, 0.12, 0.26, 0.07, 'sine');
+  }
+
+  /** Огонь: вспышка и треск. Зовётся раз в полсекунды, пока стог горит. */
+  crackle(volume = 1): void {
+    const now = performance.now();
+    if (now - this.lastCrackleAt < 420) return;
+    this.lastCrackleAt = now;
+    this.noise(0.3, 0.2 * volume, 700, 'lowpass');
+    this.noise(0.05, 0.22 * volume, 3800, 'highpass', 0.08);
+    this.noise(0.04, 0.16 * volume, 4600, 'highpass', 0.21);
+  }
+
+  /** Дождь: мягкий шум. Зовётся постоянно, пока игрок под тучей. */
+  rain(): void {
+    const now = performance.now();
+    if (now - this.lastRainAt < 380) return;
+    this.lastRainAt = now;
+    this.noise(0.6, 0.07, 5200, 'highpass');
   }
 
   /** Пустое ружьё: сухой щелчок курка. */

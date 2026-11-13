@@ -93,6 +93,21 @@ export interface Tuning {
   dogBitePeriod: number; // секунд между укусами
   dogCrawlTime: number; // секунд ползает собака, которой косой подрезали ноги
 
+  // Капкан, находки, пожар, дождь
+  trapKg: number; // цена капкана у своей будки, кг сена
+  trapTime: number; // секунд стоит попавший в капкан
+  bonusFirst: number; // на какой секунде дня появляется первая находка
+  bonusEvery: number; // через сколько секунд — следующие
+  bonusTime: number; // сколько секунд действуют точило и сапоги
+  sharpRate: number; // с точилом пауза между взмахами умножается на это
+  bootsSpeed: number; // в сапогах скорость бега умножается на это
+  fireRate: number; // сколько сена в секунду теряет горящий стог, кг
+  fireTime: number; // сколько секунд горит стог, если его не тушить
+  rainRadius: number; // радиус тучи, м (0 — дождя не бывает)
+  rainSpeed: number; // скорость тучи, м/с
+  rainFrom: number; // туча приходит не раньше этой секунды дня
+  rainTo: number; // и не позже этой
+
   // Перки
   perkMaxLevel: number;
   arcPerLevel: number; // градусов дуги за уровень
@@ -177,6 +192,20 @@ export const DEFAULT_TUNING: Tuning = {
   dogBitePeriod: 1.2,
   dogCrawlTime: 5,
 
+  trapKg: 5,
+  trapTime: 3,
+  bonusFirst: 25,
+  bonusEvery: 30,
+  bonusTime: 20,
+  sharpRate: 0.6,
+  bootsSpeed: 1.3,
+  fireRate: 2,
+  fireTime: 10,
+  rainRadius: 7,
+  rainSpeed: 1.5,
+  rainFrom: 40,
+  rainTo: 100,
+
   perkMaxLevel: 5,
   arcPerLevel: 25,
   reachPerLevel: 0.35,
@@ -255,6 +284,19 @@ export function tuningValues(t: Tuning): number[] {
     t.dogLeash,
     t.dogBitePeriod,
     t.dogCrawlTime,
+    t.trapKg,
+    t.trapTime,
+    t.bonusFirst,
+    t.bonusEvery,
+    t.bonusTime,
+    t.sharpRate,
+    t.bootsSpeed,
+    t.fireRate,
+    t.fireTime,
+    t.rainRadius,
+    t.rainSpeed,
+    t.rainFrom,
+    t.rainTo,
     t.perkMaxLevel,
     t.arcPerLevel,
     t.reachPerLevel,

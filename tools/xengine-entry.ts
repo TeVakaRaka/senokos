@@ -30,3 +30,10 @@ for (let seed = 1; seed <= 6; seed++) {
   const hits = game.players.reduce((n, p) => n + p.hits + p.shotHits, 0);
   out(`4 ${seed} ${hex8(hashGame(game))} ${kg} ${hits}`);
 }
+// Вчетвером командами 2×2: общий стог, свои не бьют своих.
+for (let seed = 1; seed <= 4; seed++) {
+  const { game } = autoplay(seed, Infinity, DEFAULT_TUNING, 4, true);
+  const kg = game.players.map((p) => Math.round(p.stacked)).join(':');
+  const hits = game.players.reduce((n, p) => n + p.hits + p.shotHits, 0);
+  out(`8 ${seed} ${hex8(hashGame(game))} ${kg} ${hits}`);
+}

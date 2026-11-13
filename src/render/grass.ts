@@ -310,6 +310,13 @@ export class Grass {
   }
 
   /** Сгрести сено с кустика: остаётся стерня. */
+  /** Скошенное на этом кустике намокло: на вид оно снова свежее и сохнет заново. */
+  wet(tuftIndex: number, gameTime: number): void {
+    const attr = this.stateAttrs[this.tuftChunk[tuftIndex]!]!;
+    (attr.array as Float32Array)[this.tuftSlot[tuftIndex]! * 4 + 1] = gameTime;
+    attr.needsUpdate = true;
+  }
+
   rake(tuftIndex: number, time: number): void {
     const attr = this.stateAttrs[this.tuftChunk[tuftIndex]!]!;
     (attr.array as Float32Array)[this.tuftSlot[tuftIndex]! * 4 + 2] = time;

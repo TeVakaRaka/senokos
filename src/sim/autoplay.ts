@@ -22,8 +22,9 @@ export function autoplay(
   ticks = Infinity,
   tuning: Tuning = DEFAULT_TUNING,
   playerCount = 1,
+  teams = false,
 ): AutoplayResult {
-  const game = createGame(seed, tuning, playerCount);
+  const game = createGame(seed, tuning, playerCount, -1, teams);
   const bots = game.players.map((p) => createBot(seed, p.id));
   const recorder = new Recorder();
   const inputs = new Array<number>(playerCount).fill(0);

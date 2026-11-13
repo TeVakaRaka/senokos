@@ -4,9 +4,11 @@
 // а граблями — вытаскивать сено из чужого стога.
 
 import { giveShop } from './arms.ts';
+import { allies } from './combat.ts';
 import { giveKennel } from './dog.ts';
 import { cellCoord } from './field.ts';
 import type { Game, Player } from './game.ts';
+import { spring, trapAt } from './trap.ts';
 import { DT } from './tuning.ts';
 
 /** Тюк, выроненный на землю. */
@@ -113,19 +115,29 @@ export function pickDrops(g: Game, p: Player): void {
   drops.length = write;
 }
 
-/** Кража: у чужого стога грабли вытаскивают из него сено в свой тюк. */
+/**
+ * Кража: у чужого стога грабли вытаскивают из него сено в свой тюк. У своих (в команде)
+ * не крадут. Если у стога взведён капкан, первый же вор попадает в него и остаётся ни с чем.
+ */
 export function raid(g: Game, p: Player): void {
   const cap = p.d.carryCap;
   const r = g.tuning.stackReach;
+  let left = g.tuning.stealRate * DT; // сколько можно утащить за шаг (стог бывает общим на двоих)
   for (let k = 0; k < g.players.length; k++) {
     const q = g.players[k]!;
-    if (q === p || q.stacked <= 0 || p.load >= cap) continue;
+    if (q === p || allies(g, p, q) || q.stacked <= 0 || p.load >= cap || left <= 0) continue;
     const dx = p.x - q.stackX;
     const dy = p.y - q.stackY;
     if (dx * dx + dy * dy > r * r) continue;
-    let kg = g.tuning.stealRate * DT;
+    const owner = trapAt(g, q);
+    if (owner) {
+      spring(g, owner, p);
+      return;
+    }
+    let kg = left;
     if (kg > cap - p.load) kg = cap - p.load;
     if (kg > q.stacked) kg = q.stacked;
+    left -= kg;
     q.stacked -= kg;
     if (q.stacked < 1e-9) q.stacked = 0;
     q.robbed += kg;

@@ -57,6 +57,7 @@ interface Setup {
   seed: number;
   me: number; // номер своего игрока: по сети он у каждого свой
   players: number; // сколько игроков на поле
+  teams: boolean; // команды 2×2 (вчетвером)
   counted: boolean; // идёт ли итог в счёт побед
   net: NetSetup | null;
 }
@@ -115,9 +116,12 @@ function readMode(): Mode {
 }
 
 /** Открыть игру заново в нужном режиме: сразу в бой или на заставку. */
-function restart(mode: Mode, autostart: boolean): void {
+function restart(mode: Mode, autostart: boolean, teams = params.get('teams') === '1'): void {
   const next = new URLSearchParams(location.search);
   next.set('mode', mode);
+  // «2×2 с ботами» — тот же режим «против бота», только вчетвером и командами.
+  if (teams && mode === 'pvp') next.set('teams', '1');
+  else next.delete('teams');
   if (autostart) next.set('go', '1');
   else next.delete('go');
   const query = `?${next.toString()}`;
@@ -154,25 +158,32 @@ const platform = new Platform();
  * Где сервер игры по сети. Либо он сам раздаёт эту страницу, либо игра лежит на обычном
  * хостинге, а адрес сервера записан рядом, в net.json. Возвращает адрес (http…) или null.
  */
-async function findServer(): Promise<string | null> {
-  const answers = async (base: string): Promise<boolean> => {
+/** Сервер игры по сети: адрес и умеет ли он передавать выбор «команды 2×2». */
+interface ServerInfo {
+  url: string;
+  teams: boolean;
+}
+
+async function findServer(): Promise<ServerInfo | null> {
+  const answers = async (base: string): Promise<ServerInfo | null> => {
     try {
       const r = await fetch(`${base}/api/ping`, { cache: 'no-store' });
-      if (!r.ok) return false;
-      return ((await r.json()) as { senokos?: number }).senokos === NET_PROTOCOL;
+      if (!r.ok) return null;
+      const ping = (await r.json()) as { senokos?: number; teams?: boolean };
+      return ping.senokos === NET_PROTOCOL ? { url: base, teams: ping.teams === true } : null;
     } catch {
-      return false; // сервера нет или это не он
+      return null; // сервера нет или это не он
     }
   };
   const here = new URL('.', location.href).href.replace(/\/+$/, '');
-  if (await answers(here)) return here;
+  const local = await answers(here);
+  if (local) return local;
   try {
     const r = await fetch('./net.json', { cache: 'no-store' });
     if (!r.ok) return null;
     const config = (await r.json()) as { server?: unknown };
     if (typeof config.server !== 'string' || !/^https?:\/\//.test(config.server)) return null;
-    const base = config.server.replace(/\/+$/, '');
-    return (await answers(base)) ? base : null;
+    return await answers(config.server.replace(/\/+$/, ''));
   } catch {
     return null;
   }
@@ -193,13 +204,16 @@ function boot(): void {
   // В одиночку поле на весь день одно — результаты можно сравнивать. Против бота каждый
   // раз новое, иначе бот ходил бы одинаково.
   const seed = fixedSeed || (mode === 'pvp' ? todaySeed() * 100 + (readPvp().games % 100) : todaySeed());
+  // «2×2 с ботами»: ты с ботом-напарником против двух ботов (?teams=1).
+  const teams = mode === 'pvp' && params.get('teams') === '1';
   // Показ бота и забеги с заданным зерном в счёт побед не идут.
   startGame(platformReady, {
     mode,
     seed,
     me: 0,
-    players: mode === 'pvp' ? 2 : 1,
-    counted: !fixedSeed && !params.has('auto'),
+    players: mode === 'pvp' ? (teams ? 4 : 2) : 1,
+    teams,
+    counted: !fixedSeed && !params.has('auto') && !teams,
     net: null,
   });
 }
@@ -243,9 +257,18 @@ function runLobby(platformReady: Promise<void>): void {
     action.textContent = 'В меню';
   });
 
-  function openRoom(server: string): void {
+  function openRoom(info: ServerInfo): void {
+    const server = info.url;
     const link = new NetLink(`${server.replace(/^http/, 'ws')}/ws`, room, NET_VERSION);
-    startButton.onclick = () => link.go();
+    // Вчетвером тот, кто начинает, может включить команды 2×2 (если сервер умеет это передать).
+    let teams = false;
+    const teamsButton = $('overlay-teams');
+    teamsButton.onclick = () => {
+      teams = !teams;
+      teamsButton.classList.toggle('primary', teams);
+      teamsButton.textContent = teams ? 'Команды 2×2: да' : 'Команды 2×2: нет';
+    };
+    startButton.onclick = () => link.go(teams);
 
     // «Позвать друзей»: поделиться ссылкой или скопировать её (браузер даёт это только по https).
     const canShare = typeof navigator.share === 'function';
@@ -296,7 +319,12 @@ function runLobby(platformReady: Promise<void>): void {
             : 'Прямой связи нет: игра пойдёт через сервер и будет запаздывать.';
         text.append(document.createElement('br'), line);
       }
-      // Начинает первый в комнате — когда все в сборе.
+      // Начинает первый в комнате — когда все в сборе. Команды — только вчетвером.
+      teamsButton.hidden = !(state.host && state.count === 4 && info.teams);
+      if (teamsButton.hidden) teams = false;
+      if (state.host && state.count === 4 && teams) {
+        text.append(document.createElement('br'), 'Команды: красный с жёлтым против синего с фиолетовым.');
+      }
       startButton.hidden = !state.host;
       startButton.disabled = state.count < 2;
       startButton.textContent = state.count < 2 ? 'Ждём друзей…' : `Начать игру: ${state.count}`;
@@ -332,7 +360,7 @@ function runLobby(platformReady: Promise<void>): void {
         draw();
       },
       signal: (from, card) => mesh?.signal(from, card),
-      start: (seed, you, players, delay, direct) => {
+      start: (seed, you, players, delay, direct, squads) => {
         // Запас для ввода назначает сервер — один на всех, по замеру связи игроков.
         const steps = Math.max(INPUT_DELAY, Math.min(15, Math.round(delay) || INPUT_DELAY));
         const fast = mesh;
@@ -357,12 +385,14 @@ function runLobby(platformReady: Promise<void>): void {
         $('hud').hidden = false;
         action.hidden = true;
         startButton.hidden = true;
+        teamsButton.hidden = true;
         share.hidden = true;
         startGame(platformReady, {
           mode: 'net',
           seed,
           me: you,
           players,
+          teams: squads && players === 4,
           counted: false,
           net: { link, lock, direct, via },
         });
@@ -386,20 +416,23 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
   const { mode, seed, net } = setup;
   const ME = setup.me;
   const duel = setup.players > 1;
-  // Как называть соперника k: кто он («Бот», «Друг», «Синий») и чей («бота», «друга», «синего»).
+  // Как называть игрока k: кто он («Бот», «Друг», «Синий», «Напарник») и чей («бота», «друга»,
+  // «синего», «напарника»). Когда соперник один — по роли, когда их несколько — по цвету.
+  const mate = (k: number): boolean => setup.teams && k !== ME && k % 2 === ME % 2;
   const who = (k: number): string => {
-    if (!net) return 'Бот';
-    if (setup.players === 2) return 'Друг';
+    if (mate(k)) return 'Напарник';
+    if (setup.players === 2) return net ? 'Друг' : 'Бот';
     const name = colorName(k);
     return name.charAt(0).toUpperCase() + name.slice(1);
   };
-  const whose = (k: number): string => (!net ? 'бота' : setup.players === 2 ? 'друга' : colorWhose(k));
+  const whose = (k: number): string =>
+    mate(k) ? 'напарника' : setup.players === 2 ? (net ? 'друга' : 'бота') : colorWhose(k);
   const pvp = readPvp();
   // По сети числа баланса у всех обязаны совпадать — отладочные ползунки там не действуют.
   const tuning = net ? cloneTuning(DEFAULT_TUNING) : loadTuning();
   // Локацию выбирает зерно (по сети — у всех одинаково); в игре с ботом её можно задать адресом.
   const asked = ['meadow', 'fences', 'river'].indexOf(params.get('map') ?? '');
-  const game = createGame(seed, tuning, setup.players, net ? -1 : asked);
+  const game = createGame(seed, tuning, setup.players, net ? -1 : asked, setup.teams);
   const me = game.players[ME]!;
   const autopilot = params.has('auto');
   // За кого играют боты: за соперника — когда он не человек; за своего — только в режиме показа.
@@ -425,7 +458,7 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
   const lookRow = $('look-row');
   const countdown = $('countdown');
   const debugLine = $('debug-line');
-  const hud = new Hud(ME, game.players.length, `кг у ${whose((ME + 1) % game.players.length)}`);
+  const hud = new Hud(ME, game.players.length, `кг у ${whose((ME + 1) % game.players.length)}`, game.team);
   const cards = new PerkCards();
   const results = new Results();
   const toast = new Toast();
@@ -495,18 +528,21 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
     };
   } else {
     // Режим, в который играли в прошлый раз, уже загружен и стартует сразу; другой — с перезагрузкой.
-    const choose = (wanted: 'solo' | 'pvp') => {
+    const choose = (wanted: 'solo' | 'pvp', teams = false) => {
       writeStored(MODE_KEY, wanted);
-      if (wanted === mode) begin(true);
-      else restart(wanted, true);
+      if (wanted === mode && teams === setup.teams) begin(true);
+      else restart(wanted, true, teams);
     };
     const soloButton = $('play-solo');
     const pvpButton = $('play-pvp');
+    const teamsButton = $('play-teams');
     const netButton = $('play-net');
     soloButton.classList.toggle('primary', mode === 'solo');
-    pvpButton.classList.toggle('primary', mode === 'pvp');
+    pvpButton.classList.toggle('primary', mode === 'pvp' && !setup.teams);
+    teamsButton.classList.toggle('primary', mode === 'pvp' && setup.teams);
     soloButton.addEventListener('click', () => choose('solo'));
     pvpButton.addEventListener('click', () => choose('pvp'));
+    teamsButton.addEventListener('click', () => choose('pvp', true));
     netButton.addEventListener('click', () => restart('net', false));
     // Кнопка «С друзьями» есть, только пока работает сервер игры по сети.
     void findServer().then((server) => {
@@ -635,6 +671,63 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
       toast.show(`${who(fx.robber)} тащит сено из твоего стога!`, 'bad', 4000);
     }
     if (fx.stole > 0) toast.show('Тащишь сено из чужого стога', 'good', 6000);
+
+    // Капкан.
+    if (fx.trapSet) {
+      sound.snap();
+      toast.show('Капкан взведён: первый вор в него попадёт', 'good');
+    }
+    if (fx.snared) {
+      sound.snap();
+      platform.haptic('heavy');
+      hud.flash();
+      toast.show('Капкан! Стоишь три секунды', 'bad');
+    }
+    if (fx.caught >= 0) {
+      sound.snap();
+      hud.alarm();
+      toast.show(`${who(fx.caught)} попался в капкан у стога — беги, пока стоит!`, 'good');
+    }
+
+    // Находки.
+    if (fx.bonusBorn >= 0) {
+      const what = ['точило — коса будет бить чаще', 'сапоги — бегать быстрее', 'спички — поджечь чужой стог'][fx.bonusBorn]!;
+      toast.show(`На поле появилась находка: ${what}`, 'plain');
+    }
+    if (fx.gotBonus >= 0) {
+      sound.pickup();
+      const what = [
+        `Точило! Коса бьёт чаще ${game.tuning.bonusTime} секунд`,
+        `Сапоги! Бегаешь быстрее ${game.tuning.bonusTime} секунд`,
+        'Спички! Добеги до чужого стога — он загорится',
+      ][fx.gotBonus]!;
+      toast.show(what, 'good');
+    }
+    if (fx.foeBonus >= 0) {
+      const what = ['точило', 'сапоги', 'спички — береги стог'][fx.foeBonusKind]!;
+      toast.show(`${who(fx.foeBonus)} подобрал ${what}`, fx.foeBonusKind === 2 ? 'bad' : 'plain');
+    }
+
+    // Пожар.
+    if (fx.lit) {
+      sound.crackle(1);
+      toast.show('Поджёг! Стог горит, пока хозяин не прибежит тушить', 'good');
+    }
+    if (fx.stackLit >= 0) {
+      sound.alarm();
+      hud.alarm();
+      platform.haptic('heavy');
+      toast.show(`${who(fx.stackLit)} поджёг ${setup.teams ? 'ваш' : 'твой'} стог! Беги тушить`, 'bad');
+    }
+    if (fx.burning > 0) {
+      sound.crackle(0.8);
+      hud.alarm();
+    }
+    if (fx.doused) toast.show('Стог потушен', 'good');
+
+    // Дождь.
+    if (fx.rainStart) toast.show('Идёт туча: мокрое сено не сгребается, сохнет заново', 'plain');
+    if (fx.inRain) sound.rain();
 
     // Ружьё, патроны, бронежилеты.
     const t = game.tuning;
@@ -886,14 +979,23 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
         if (game.players.every((p) => p === me || Math.floor(p.stacked) < Math.floor(me.stacked))) pvp.wins++;
         writeStored(PVP_KEY, JSON.stringify(pvp));
       }
-      results.showMatch(
-        {
-          scores: game.players.map((p) => ({
+      // В командной игре счёт — по стогам: «у вас» и «у них».
+      const scores = setup.teams
+        ? [0, 1].map((side) => {
+            const ours = side === ME % 2;
+            let kg = 0;
+            for (const p of game.players) if (p.id % 2 === side) kg += p.stacked;
+            return { kg, label: ours ? 'у вас' : 'у них', ink: playerInk(ours ? ME : (ME + 1) % 4), me: ours };
+          })
+        : game.players.map((p) => ({
             kg: p.stacked,
             label: p === me ? 'у тебя' : `у ${whose(p.id)}`,
             ink: playerInk(p.id),
             me: p === me,
-          })),
+          }));
+      results.showMatch(
+        {
+          scores,
           hits: me.hits,
           hurt: me.hurt,
           knocked: me.knocked,

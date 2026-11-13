@@ -7,11 +7,12 @@
 // в лоб — обходит по кругу, чуть дальше удара, и бросается со спины. Косой ей можно
 // подрезать ноги — тогда она какое-то время ползает; ружьё её убивает.
 
-import { biteLegs, onFeet, scytheActive } from './combat.ts';
+import { allies, biteLegs, onFeet, scytheActive } from './combat.ts';
 import { DIR_X, DIR_Y } from './dirs.ts';
 import type { Game, Player } from './game.ts';
 import { KENNEL_RADIUS } from './gen.ts';
 import { DT } from './tuning.ts';
+import { buyTrap } from './trap.ts';
 import { collide, fenced, type Spot } from './world.ts';
 
 export const DOG_RADIUS = 0.3;
@@ -23,11 +24,12 @@ const ORBIT_GAP = 0.45; // обходит по кругу на столько м
 const ORBIT_SLACK = 0.2; // подпустив ближе круга на столько, уже не обходит, а отходит, м
 const ORBIT_LEAD = 2.5; // по кругу целится на столько метров вперёд
 
-/** Будка у стога игрока: копит сено, пока не наберётся на собаку. */
+/** Будка у стога игрока: копит сено сначала на капкан, потом на собаку. */
 export interface Kennel {
   x: number;
   y: number;
-  kg: number;
+  kg: number; // сено в счёт собаки
+  trapKg: number; // сено в счёт капкана
 }
 
 export interface Dog {
@@ -62,14 +64,22 @@ function postOf(g: Game, owner: number): Spot {
   return len > 1e-6 ? { x: k.x + (dx / len) * off, y: k.y + (dy / len) * off } : { x: k.x + off, y: k.y };
 }
 
-/** Сено в будку: игрок остановился у своей будки с тюком и чуть постоял. Набралось — появляется собака. */
+/**
+ * Сено в будку: игрок остановился у своей будки с тюком и чуть постоял. Сначала оно идёт
+ * на капкан (если он не взведён), потом — на собаку (если её нет).
+ */
 export function giveKennel(g: Game, p: Player): boolean {
   const kennel = g.kennels[p.id];
-  if (!kennel || g.dogs[p.id] || p.load <= 0 || p.still < g.dwellTicks) return false;
+  if (!kennel || p.load <= 0 || p.still < g.dwellTicks) return false;
   const t = g.tuning;
   const dx = p.x - kennel.x;
   const dy = p.y - kennel.y;
   if (dx * dx + dy * dy > t.kennelReach * t.kennelReach) return false;
+  if (!p.trap) {
+    buyTrap(g, kennel, p);
+    return true;
+  }
+  if (g.dogs[p.id]) return false;
   let kg = t.unloadRate * DT;
   if (kg > p.load) kg = p.load;
   const room = t.dogKg - kennel.kg;
@@ -245,7 +255,7 @@ function threat(g: Game, dog: Dog, owner: Player): Player | null {
   let bestD2 = 0;
   for (let k = 0; k < g.players.length; k++) {
     const q = g.players[k]!;
-    if (q === owner || !onFeet(q) || !(scytheActive(q) || q.toolCd > 0)) continue;
+    if (allies(g, q, owner) || !onFeet(q) || !(scytheActive(q) || q.toolCd > 0)) continue;
     const rx = dog.x - q.x;
     const ry = dog.y - q.y;
     const d2 = rx * rx + ry * ry;
@@ -276,7 +286,7 @@ function intruder(g: Game, dog: Dog, owner: Player): Player | null {
   let bestD2 = 0;
   for (let k = 0; k < g.players.length; k++) {
     const q = g.players[k]!;
-    if (q === owner || !onFeet(q)) continue;
+    if (allies(g, q, owner) || !onFeet(q)) continue;
     const sx = q.x - owner.stackX;
     const sy = q.y - owner.stackY;
     const s2 = sx * sx + sy * sy;

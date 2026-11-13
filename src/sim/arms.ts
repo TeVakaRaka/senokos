@@ -16,7 +16,7 @@
 // чужая собака погибает. Кому подрезали ноги, тот роняет ружьё вместе с патронами —
 // подобрать его может любой.
 
-import { holdsGun, knockDown, onFeet, scytheActive } from './combat.ts';
+import { allies, holdsGun, knockDown, onFeet, scytheActive } from './combat.ts';
 import { DIR_X, DIR_Y } from './dirs.ts';
 import { DOG_RADIUS, killDog } from './dog.ts';
 import type { Game, Player } from './game.ts';
@@ -186,7 +186,7 @@ export function shoot(g: Game, p: Player): void {
 
   for (let k = 0; k < g.players.length; k++) {
     const q = g.players[k]!;
-    if (q === p || q.shield > 0 || q.down > 0) continue;
+    if (allies(g, p, q) || q.shield > 0 || q.down > 0) continue;
     const dx = q.x - p.x;
     const dy = q.y - p.y;
     const d2 = dx * dx + dy * dy;
@@ -202,7 +202,7 @@ export function shoot(g: Game, p: Player): void {
   const dogReach = p.d.reach + DOG_RADIUS + t.gunDogExtra;
   for (let k = 0; k < g.dogs.length; k++) {
     const dog = g.dogs[k];
-    if (!dog || dog.owner === p.id) continue;
+    if (!dog || allies(g, p, g.players[dog.owner]!)) continue;
     const dx = dog.x - p.x;
     const dy = dog.y - p.y;
     const d2 = dx * dx + dy * dy;

@@ -293,6 +293,9 @@ export async function startServer(options = {}) {
       // Ждём игроков. Начать может только первый, и только когда есть с кем играть.
       if (msg.t !== 'go' || room.peers[0] !== peer || room.peers.length < 2) return;
       const seed = randomInt(1, 2147483647); // зерно поля придумывает сервер
+      // Команды 2×2 включает тот, кто начинает игру; имеют смысл только вчетвером. Сервер
+      // лишь передаёт этот выбор всем — игру он по-прежнему не считает.
+      const teams = msg.teams === true && room.peers.length === 4;
       // Если каждый соединился с каждым напрямую, ввод пойдёт мимо сервера — запас считаем
       // по прямой связи. Иначе хотя бы одной паре придётся идти через сервер — считаем по ней.
       const others = room.peers.length - 1;
@@ -304,7 +307,7 @@ export async function startServer(options = {}) {
       rooms.delete(room.name);
       room.peers.forEach((p, you) => {
         p.index = you;
-        p.send({ t: 'start', seed, you, players: room.peers.length, delay, direct });
+        p.send({ t: 'start', seed, you, players: room.peers.length, delay, direct, teams });
       });
       log(
         `комната «${room.name}»: игра началась, игроков: ${room.peers.length}, ` +
@@ -382,7 +385,8 @@ export async function startServer(options = {}) {
     };
     if (path === '/api/ping') {
       // По этому ответу игра понимает, что здесь можно играть по сети.
-      send(200, TYPES['.json'], Buffer.from(JSON.stringify({ senokos: PROTOCOL, lan })));
+      // teams — этот сервер умеет передавать выбор «команды 2×2» (старые не умели).
+      send(200, TYPES['.json'], Buffer.from(JSON.stringify({ senokos: PROTOCOL, lan, teams: true })));
       return;
     }
     if (path.endsWith('/')) path += 'index.html';

@@ -25,9 +25,9 @@ export interface NetEvents {
   /**
    * Игра началась. seed — зерно поля, you — номер своего игрока, players — сколько всего,
    * delay — на сколько шагов вперёд отправлять ввод (одно число на всех),
-   * direct — все ли соединены друг с другом напрямую.
+   * direct — все ли соединены друг с другом напрямую, teams — игра командами 2×2.
    */
-  start?: (seed: number, you: number, players: number, delay: number, direct: boolean) => void;
+  start?: (seed: number, you: number, players: number, delay: number, direct: boolean, teams: boolean) => void;
   /** «Визитка» для прямой связи от игрока с номером подключения from. */
   signal?: (from: number, data: unknown) => void;
   /** Замер связи с сервером: время туда и обратно, мс. */
@@ -129,7 +129,7 @@ export class NetLink {
       if (typeof msg.seed !== 'number' || typeof msg.you !== 'number' || typeof msg.players !== 'number') return;
       this.me = msg.you;
       this.stopPing();
-      this.events.start?.(msg.seed, msg.you, msg.players, num(msg.delay), msg.direct === true);
+      this.events.start?.(msg.seed, msg.you, msg.players, num(msg.delay), msg.direct === true, msg.teams === true);
     } else if (msg.t === 'left') {
       this.events.gone?.(num(msg.who));
     } else if (msg.t === 'full' || msg.t === 'mismatch') {
@@ -142,9 +142,9 @@ export class NetLink {
     if (this.ws.readyState === 1) this.ws.send(text);
   }
 
-  /** Первый в комнате говорит: все в сборе, начинаем. */
-  go(): void {
-    this.sendText('{"t":"go"}');
+  /** Первый в комнате говорит: все в сборе, начинаем. teams — командами 2×2 (вчетвером). */
+  go(teams = false): void {
+    this.sendText(teams ? '{"t":"go","teams":true}' : '{"t":"go"}');
   }
 
   /** Передать «визитку» для прямой связи игроку с номером подключения to. */

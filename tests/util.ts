@@ -91,13 +91,13 @@ export function tuftAtDistance(g: Game, x: number, y: number, min: number, max: 
  * и недобранные пачки с жилетами), в будках и отданное за собак, патроны и бронежилеты.
  */
 export function totalKg(g: Game): number {
-  let kg = groundKg(g) + dropsKg(g) + g.spentKg;
+  let kg = groundKg(g) + dropsKg(g) + g.spentKg + g.burntKg;
   for (const p of g.players) kg += p.load + p.stacked;
   if (g.shop) {
     kg += g.shop.kg;
     for (const v of g.shop.ammoKg) kg += v;
     for (const v of g.shop.vestKg) kg += v;
   }
-  for (const k of g.kennels) kg += k.kg;
+  for (const k of g.kennels) kg += k.kg + k.trapKg;
   return kg;
 }

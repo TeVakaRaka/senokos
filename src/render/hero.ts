@@ -28,6 +28,7 @@ export interface HeroPose {
   gun: boolean; // при нём ружьё
   gunReady: boolean; // оно в руках и может выстрелить (в руках коса, есть патроны)
   armor: number; // сколько выстрелов ещё держит бронежилет (0 — его нет)
+  snared: boolean; // стоит в капкане
   flying: number; // 0…1 — летит, отброшенный выстрелом (0 — не летит)
   down: boolean; // лежит после выстрела
 }
@@ -46,6 +47,7 @@ export class HeroView {
   private aim = 0; // 1 — только что выстрелил: отдача
   private hold = 0; // 0 — ружьё за спиной, 1 — в руках, стволом вперёд (плавно)
   private readonly vest = new THREE.Group();
+  private readonly jaws = new THREE.Group();
   private flashAge = 10;
   private downMix = 0; // 0 — на ногах, 1 — лежит на спине (плавно)
   private readonly legL: THREE.Mesh;
@@ -140,6 +142,21 @@ export class HeroView {
 
     this.figure.add(this.body);
     this.group.add(this.figure);
+
+    // Капкан на ногах: железный круг с зубьями (виден, пока косарь в нём стоит).
+    const iron = lambert(0x3a3f47);
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.06, 12), iron);
+    ring.position.y = 0.05;
+    this.jaws.add(ring);
+    for (let i = 0; i < 10; i++) {
+      const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.3, 4), lambert(0xb9c2cc));
+      const a = (i / 10) * Math.PI * 2;
+      tooth.position.set(Math.cos(a) * 0.3, 0.2, Math.sin(a) * 0.3);
+      tooth.rotation.set(Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5);
+      this.jaws.add(tooth);
+    }
+    this.jaws.visible = false;
+    this.group.add(this.jaws);
 
     // Грабли-волокуша: косарь тащит их за собой. Поперечина с зубьями (её ширина —
     // ширина граблей в игре) на черенке; сгребённое сено собирается за ней в тюк.
@@ -375,6 +392,10 @@ export class HeroView {
     if (this.flash.visible) this.flash.scale.setScalar(1 + this.flashAge * 9);
     this.body.position.x -= 0.12 * kick;
     this.vest.visible = pose.armor > 0;
+    this.jaws.visible = pose.snared;
+    // В капкане дёргается на месте.
+    if (pose.snared) this.figure.rotation.x = Math.sin(time * 22) * 0.07;
+    else this.figure.rotation.x = 0;
 
     // Подстрелили: летит назад, кувыркаясь, и лежит на спине.
     this.downMix += ((pose.down ? 1 : 0) - this.downMix) * (1 - Math.exp(-dt * (pose.down ? 14 : 5)));
