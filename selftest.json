@@ -1,0 +1,37 @@
+{
+  "ticks": 1800,
+  "tuning": "2042bc33",
+  "engine": "node v26.13.1",
+  "runs": [
+    {
+      "seed": 1,
+      "players": 1,
+      "hash": "a2446ae0"
+    },
+    {
+      "seed": 2,
+      "players": 1,
+      "hash": "07270824"
+    },
+    {
+      "seed": 3,
+      "players": 1,
+      "hash": "7bca8a03"
+    },
+    {
+      "seed": 1,
+      "players": 2,
+      "hash": "40a12e8c"
+    },
+    {
+      "seed": 2,
+      "players": 2,
+      "hash": "53e0c537"
+    },
+    {
+      "seed": 3,
+      "players": 2,
+      "hash": "956db323"
+    }
+  ]
+}
