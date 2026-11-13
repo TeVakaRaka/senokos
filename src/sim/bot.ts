@@ -1,14 +1,18 @@
 // Бот. Играет по тем же правилам, что человек: отдаёт симуляции один байт ввода за шаг.
 // Нужен для тестов, подбора баланса, показа игры без рук — и как соперник в PvP.
 //
-// Порядок решений: выбрать улучшение → (PvP) гнать вора и нападать, когда выгодно →
-// забрать упавший тюк → отвезти полный тюк → (PvP) сходить за сеном в чужой стог →
-// сгрести сухое сено → косить полосами. Нужный инструмент бот берёт в руки сам.
+// Порядок решений: выбрать улучшение → (PvP) поднять ружьё, уйти из-под чужого ствола
+// и от чужой собаки, раненым уйти от косы, с ружьём — охотиться (с косой в руках: с граблями
+// оно не стреляет), гнать вора, добить раненого и нападать, когда выгодно → забрать упавший
+// тюк → отвезти полный тюк (в стог, в ларёк — пока ещё можно стать тем, кто сдал больше
+// всех, — или в будку за собакой) → сходить за сеном в чужой стог → сгрести сухое сено →
+// косить полосами. Нужный инструмент бот берёт в руки сам.
 
 import { dirFromVector } from './dirs.ts';
 import { nearestStanding, nearestTuft, standingInRect } from './field.ts';
-import { INPUT_SWAP, TOOL_RAKE, TOOL_SCYTHE, type Game, type Player } from './game.ts';
+import { INPUT_SWAP, onFeet, TOOL_RAKE, TOOL_SCYTHE, type Dog, type Game, type Player } from './game.ts';
 import { dryKg } from './hay.ts';
+import { free, lineClear, waypoint } from './nav.ts';
 import { CHOICE_BASE, PERK_ARC, PERK_CARRY, PERK_RAKE, PERK_RATE, PERK_REACH } from './perks.ts';
 import { Rng } from './rng.ts';
 import { DT, TICK_RATE } from './tuning.ts';
@@ -22,6 +26,17 @@ const HUNT_RANGE = 11; // с такого расстояния бот идёт �
 const HUNT_TICKS = 150; // сколько шагов длится охота за тюком
 const DEFEND_TICKS = 150; // сколько шагов гонит вора от своего стога
 const YARD = 6; // сено с земли ближе этого к чужому стогу бот не трогает, м
+const FLEE_RANGE = 7; // раненый бот уходит от косаря, пока тот ближе этого, м
+const GUN_FETCH = 24; // за упавшим ружьём бот бежит с такого расстояния, м
+const GUN_DANGER = 6; // ближе этого к чужому стволу бот не лезет, м
+const GUN_HUNT = 14; // с ружьём бот выходит на охоту за соперником в таком радиусе, м
+const DOG_SHARE = 40; // как часто, будучи при сене, несёт тюк в будку, пока нет собаки (%)
+
+// Куда везти тюк. Решается один раз на тюк, чтобы бот не метался.
+const DEST_NONE = 0;
+const DEST_STACK = 1;
+const DEST_SHOP = 2;
+const DEST_KENNEL = 3;
 
 export interface Bot {
   me: number; // за какого игрока играет
@@ -40,6 +55,14 @@ export interface Bot {
   calm: number; // шагов до следующей погони
   raiding: boolean; // идёт за сеном в чужой стог
   raidIn: number; // шагов до следующего набега
+  dest: number; // куда везёт нынешний тюк: DEST_*
+  rushAt: number; // с какого шага дня бот сам начинает копить на ружьё
+  seeksGun: boolean; // борется ли за ружьё вообще (выключают в замерах баланса)
+  // Обход заборов и реки: куда идти сейчас, ради какой цели и когда пересчитать.
+  wpx: number;
+  wpy: number;
+  wpGoal: number; // цель, ради которой посчитана точка (номер клетки 0,5 м); −1 — нет
+  wpAge: number; // шагов до пересчёта
 }
 
 export function createBot(seed: number, me = 0): Bot {
@@ -61,6 +84,15 @@ export function createBot(seed: number, me = 0): Bot {
     calm: 15 * TICK_RATE, // в начале дня не нападает: дать сопернику освоиться
     raiding: false,
     raidIn: (40 + rng.int(25)) * TICK_RATE,
+    dest: DEST_NONE,
+    // Каждый бот в свой момент дня решает побороться за ружьё (а если соперник начал
+    // раньше — отвечает сразу).
+    rushAt: (15 + rng.int(50)) * TICK_RATE,
+    seeksGun: true,
+    wpx: 0,
+    wpy: 0,
+    wpGoal: -1,
+    wpAge: 0,
   };
 }
 
@@ -104,21 +136,76 @@ function act(g: Game, b: Bot, p: Player): number {
   const sy = p.stackY - p.y;
   const stackDist = Math.sqrt(sx * sx + sy * sy);
   const full = p.load >= cap - 1e-9;
-  const foe = g.players.length > 1 ? g.players[(b.me + 1) % g.players.length]! : null;
+  if (p.load <= 0) b.dest = DEST_NONE;
 
-  // Ноги подрезаны: ползти к своему стогу.
-  if (p.crawl > 0) {
+  // Соперник — ближайший из остальных.
+  let foe: Player | null = null;
+  let foeDist = Infinity;
+  for (let k = 0; k < g.players.length; k++) {
+    const q = g.players[k]!;
+    if (q === p) continue;
+    const d = Math.sqrt((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y));
+    if (d < foeDist) {
+      foe = q;
+      foeDist = d;
+    }
+  }
+
+  // Ноги подрезаны: ползти к своему стогу. Подстрелен — лежать.
+  if (p.crawl > 0 || p.down > 0) {
     b.chase = 0;
     b.raiding = false;
     b.raking = false;
-    return stackDist > 1.6 ? go(b, sx, sy) : idle(b);
+    return p.crawl > 0 && stackDist > 1.6 ? goTo(g, b, p, p.stackX, p.stackY) : idle(b);
   }
 
-  let foeDist = Infinity;
+  // Ружьё и собаки.
+  const gun = g.gun;
+  const armed = gun !== null && gun.holder === p.id;
+  if (gun && gun.holder < 0) {
+    // Ружьё лежит на земле — бежать подбирать.
+    const gx = gun.x - p.x;
+    const gy = gun.y - p.y;
+    if (gx * gx + gy * gy < GUN_FETCH * GUN_FETCH) {
+      b.raiding = false;
+      b.raking = false;
+      return goTo(g, b, p, gun.x, gun.y);
+    }
+  }
+  const dog = huntingDog(g, p);
+  if (dog) {
+    const dx = dog.x - p.x;
+    const dy = dog.y - p.y;
+    b.raiding = false;
+    b.raking = false;
+    if (armed) {
+      b.want = TOOL_SCYTHE; // ружьё стреляет только с косой в руках
+      return go(b, dx, dy); // повернуться к собаке — выстрелит само
+    }
+    // Без ружья — уходить от её стога: дальше поводка она не гонится.
+    const owner = g.players[dog.owner]!;
+    b.want = TOOL_RAKE;
+    return go(b, p.x - owner.stackX, p.y - owner.stackY);
+  }
+  if (gun && gun.holder >= 0 && !armed) {
+    // Чужой ствол рядом — уйти из-под него (с граблями быстрее). Пока у хозяина в руках
+    // грабли, ружьё молчит — тогда он обычный соперник, и на него можно напасть.
+    const h = g.players[gun.holder]!;
+    const hx = h.x - p.x;
+    const hy = h.y - p.y;
+    const loaded = h.tool === TOOL_SCYTHE || h.d.combo;
+    if (loaded && onFeet(h) && hx * hx + hy * hy < GUN_DANGER * GUN_DANGER) {
+      b.chase = 0;
+      b.raiding = false;
+      b.raking = false;
+      b.want = TOOL_RAKE;
+      return go(b, -hx, -hy);
+    }
+  }
+
   if (foe) {
     const fx = foe.x - p.x;
     const fy = foe.y - p.y;
-    foeDist = Math.sqrt(fx * fx + fy * fy);
     const vulnerable = foe.shield === 0;
     // Соперник с граблями у моего стога — ворует.
     const tx = foe.x - p.stackX;
@@ -126,11 +213,29 @@ function act(g: Game, b: Bot, p: Player): number {
     const thiefReach = t.stackReach + 0.5;
     const thief = p.stacked > 0 && foe.tool === TOOL_RAKE && tx * tx + ty * ty <= thiefReach * thiefReach;
 
+    // Раненого можно добить вторым ударом, пока рана не зажила.
+    const wounded = foe.wound > 0 && foe.crawl === 0;
+    // Сам ранен, а соперник с косой рядом — уносить ноги (с граблями бежать быстрее).
+    // Но если и он ранен и открыт для удара, выгоднее ударить первым.
+    if (p.wound > 0 && foe.crawl === 0 && foe.tool === TOOL_SCYTHE && foeDist < FLEE_RANGE && !(wounded && vulnerable)) {
+      b.chase = 0;
+      b.raiding = false;
+      b.raking = false;
+      b.want = TOOL_RAKE;
+      return go(b, -fx, -fy);
+    }
+
     if (b.calm > 0) b.calm--;
+    if (armed && b.chase === 0 && b.calm === 0 && vulnerable && onFeet(foe) && foeDist < GUN_HUNT) {
+      // С ружьём — на охоту: подойти лицом к сопернику, ружьё выстрелит само.
+      b.chase = HUNT_TICKS;
+      b.calm = (10 + b.rng.int(8)) * TICK_RATE;
+    }
     if (b.chase > 0) {
       b.chase--;
-      if (!vulnerable || foeDist > 16) b.chase = 0;
-    } else if (vulnerable) {
+      // За раненым идём и пока он под передышкой: кончится — добьём.
+      if ((!vulnerable && !wounded) || foeDist > 16) b.chase = 0;
+    } else if (vulnerable || wounded) {
       // Нападать выгодно, когда соперник медленный или безоружный, а свой тюк не тянет назад.
       // С пустыми граблями соперник быстрее косаря с косой — за таким гнаться без толку,
       // если только он не стоит, не бредёт по траве или не оказался совсем рядом.
@@ -141,6 +246,8 @@ function act(g: Game, b: Bot, p: Player): number {
       const light = p.load < cap * 0.7;
       if (thief && foeDist < 20) {
         b.chase = DEFEND_TICKS;
+      } else if (wounded && light && foeDist < AGGRO_RANGE + 2) {
+        b.chase = CHASE_TICKS; // добить раненого — не дожидаясь, пока пройдёт охота драться
       } else if (b.calm === 0 && light && loot && foeDist < HUNT_RANGE) {
         b.chase = HUNT_TICKS;
         b.calm = (28 + b.rng.int(14)) * TICK_RATE; // после погони долго занят делом
@@ -150,11 +257,27 @@ function act(g: Game, b: Bot, p: Player): number {
       }
     }
     if (b.chase > 0) {
-      b.want = TOOL_SCYTHE;
+      b.want = TOOL_SCYTHE; // бьёт коса, и ружьё стреляет только с ней
       b.raiding = false;
       // Целится чуть вперёд по ходу соперника.
-      return go(b, fx + (foe.x - foe.px) * 9, fy + (foe.y - foe.py) * 9);
+      return goTo(g, b, p, foe.x + (foe.x - foe.px) * 9, foe.y + (foe.y - foe.py) * 9);
     }
+  }
+
+  const lateDay = timeLeft < stackDist / (t.runSpeed * 0.6) + 2;
+
+  // Ружьё почти в руках: того, что уже в тюке, хватит досыпать котёл и остаться первым —
+  // нести сейчас, не дожидаясь полного тюка.
+  if (p.load > 0 && b.dest !== DEST_SHOP && b.dest !== DEST_KENNEL && g.shop && !g.shop.sold) {
+    if (p.load >= g.shopKg - g.shop.kg - 1e-6 && shopWorth(g, b, p)) b.dest = DEST_SHOP;
+  }
+
+  // Понёс тюк в ларёк или в будку — донести и сдать весь: там надо стоять на месте, а стоит
+  // тюку стать неполным, как бот уходил за новым сеном, сдав один килограмм.
+  if (p.load > 0 && (b.dest === DEST_SHOP || b.dest === DEST_KENNEL)) {
+    b.raking = false;
+    b.raiding = false;
+    return deliver(g, b, p, lateDay);
   }
 
   // Упавший тюк неподалёку — забрать.
@@ -171,17 +294,14 @@ function act(g: Game, b: Bot, p: Player): number {
         best = i;
       }
     }
-    if (best >= 0) return go(b, g.drops[best]!.x - p.x, g.drops[best]!.y - p.y);
+    if (best >= 0) return goTo(g, b, p, g.drops[best]!.x, g.drops[best]!.y);
   }
 
-  // В стог: тюк полон или день кончается, а в тюке что-то есть.
-  const lateDay = timeLeft < stackDist / (t.runSpeed * 0.6) + 2;
+  // Везти: тюк полон или день кончается, а в тюке что-то есть.
   if (full || (p.load > 0 && lateDay)) {
     b.raking = false;
     b.raiding = false;
-    b.want = TOOL_RAKE; // с граблями трава на пути не заставляет идти шагом косаря
-    if (stackDist <= t.stackReach - 0.15) return idle(b); // выгружается
-    return go(b, sx, sy);
+    return deliver(g, b, p, lateDay);
   }
 
   // Набег на чужой стог: время от времени, когда хозяин далеко, а там есть что брать.
@@ -199,11 +319,21 @@ function act(g: Game, b: Bot, p: Player): number {
         const ry = foe.stackY - p.y;
         const near = t.stackReach - 0.4;
         if (rx * rx + ry * ry <= near * near) return idle(b); // тянет сено
-        return go(b, rx, ry);
+        return goTo(g, b, p, foe.stackX, foe.stackY);
       }
     } else {
       if (b.raidIn > 0) b.raidIn--;
-      if (b.raidIn === 0 && ownerAway && foe.stacked >= 14 && p.load < cap * 0.3 && timeLeft > 25) {
+      // Стог под охраной живой собаки не трогает: с граблями в руках от неё не отбиться.
+      const guard = g.dogs[foe.id];
+      const guarded = !!guard && guard.crawl === 0;
+      // Подстрелил хозяина, а его стог недалеко — самое время идти за его сеном: пока он
+      // встанет, тюк будет полон. Ради этого и нужно ружьё.
+      const helpless = armed && foe.down > 0;
+      const rx = foe.stackX - p.x;
+      const ry = foe.stackY - p.y;
+      if (helpless && !guarded && rx * rx + ry * ry < 14 * 14 && foe.stacked >= 8 && p.load < cap * 0.6 && timeLeft > 12) {
+        b.raiding = true;
+      } else if (b.raidIn === 0 && ownerAway && !guarded && foe.stacked >= 14 && p.load < cap * 0.3 && timeLeft > 25) {
         b.raiding = true;
         b.raidIn = (45 + b.rng.int(25)) * TICK_RATE;
       }
@@ -223,17 +353,13 @@ function act(g: Game, b: Bot, p: Player): number {
     const target = nearestDry(g, p, foe);
     if (target >= 0) {
       b.want = TOOL_RAKE;
-      return go(b, g.field.x[target]! - p.x, g.field.y[target]! - p.y);
+      return goTo(g, b, p, g.field.x[target]!, g.field.y[target]!);
     }
     b.raking = false;
   }
 
   // Сгребать больше нечего, а в тюке что-то есть — отвезти.
-  if (p.load > 0) {
-    b.want = TOOL_RAKE;
-    if (stackDist <= t.stackReach - 0.15) return idle(b);
-    return go(b, sx, sy);
-  }
+  if (p.load > 0) return deliver(g, b, p, lateDay);
 
   // Косить, если скошенное успеет высохнуть до конца дня.
   if (timeLeft > t.dryTime + 6 && g.field.standing > 0) {
@@ -242,8 +368,89 @@ function act(g: Game, b: Bot, p: Player): number {
   }
 
   // Делать нечего: ждать у стога, пока досохнет.
-  if (stackDist > t.stackReach) return go(b, sx, sy);
+  if (stackDist > t.stackReach) return goTo(g, b, p, p.stackX, p.stackY);
   return idle(b);
+}
+
+/** Отвезти тюк туда, куда решено: в стог, в магазин за ружьё или в будку за собакой. */
+function deliver(g: Game, b: Bot, p: Player, late: boolean): number {
+  const t = g.tuning;
+  if (b.dest === DEST_NONE) b.dest = chooseDest(g, b, p);
+  // Тюк решили везти в стог, пока он был мал или гонка за ружьё ещё не началась, — а теперь
+  // есть смысл нести его в ларёк. (Пока тюк не начал выгружаться в стог.)
+  const sx = p.stackX - p.x;
+  const sy = p.stackY - p.y;
+  const unloading = sx * sx + sy * sy <= t.stackReach * t.stackReach;
+  if (b.dest === DEST_STACK && !late && !unloading && p.load >= 3 && shopWorth(g, b, p)) b.dest = DEST_SHOP;
+  // Пока шёл, ружьё могло выйти или достаться другому наверняка, а собака — завестись:
+  // тогда — в стог.
+  if (b.dest === DEST_SHOP && (late || !shopWorth(g, b, p))) b.dest = DEST_STACK;
+  if (b.dest === DEST_KENNEL && (g.dogs[p.id] || !g.kennels[p.id] || late)) b.dest = DEST_STACK;
+  b.want = TOOL_RAKE; // с граблями трава на пути не заставляет идти шагом косаря
+  let tx = p.stackX;
+  let ty = p.stackY;
+  let near = t.stackReach - 0.15;
+  if (b.dest === DEST_SHOP) {
+    tx = g.shop!.x;
+    ty = g.shop!.y;
+    near = t.shopReach - 0.25;
+  } else if (b.dest === DEST_KENNEL) {
+    tx = g.kennels[p.id]!.x;
+    ty = g.kennels[p.id]!.y;
+    near = t.kennelReach - 0.2;
+  }
+  const dx = tx - p.x;
+  const dy = ty - p.y;
+  if (dx * dx + dy * dy <= near * near) return idle(b); // сдаёт
+  return goTo(g, b, p, tx, ty);
+}
+
+function chooseDest(g: Game, b: Bot, p: Player): number {
+  const timeLeft = (g.dayTicks - g.tick) * DT;
+  // Нести горсть сена через всё поле нет смысла: в будку — только солидный тюк.
+  const solid = p.load >= p.d.carryCap * 0.5;
+  const kennel = g.kennels[p.id];
+  if (kennel && !g.dogs[p.id] && p.stacked >= 20 && timeLeft > 45) {
+    const need = g.tuning.dogKg - kennel.kg;
+    // Начатое — доделать: в будке уже есть сено, осталось добавить.
+    if (kennel.kg > 0 && p.load >= 3) return DEST_KENNEL;
+    if ((solid || p.load >= need - 1e-6) && b.rng.int(100) < DOG_SHARE) return DEST_KENNEL;
+  }
+  if (p.load >= 3 && shopWorth(g, b, p)) return DEST_SHOP;
+  return DEST_STACK;
+}
+
+/**
+ * Стоит ли нести сено в ларёк. Ружьё получит тот, кто сдал больше всех, поэтому:
+ * если соперника уже не обогнать — не нести (сено досталось бы его ружью); если впереди так,
+ * что уже не догонят, — досыпать, чтобы ружьё вышло скорее; пока гонка открыта — вступать,
+ * когда пришло время или когда соперник начал первым.
+ */
+function shopWorth(g: Game, b: Bot, p: Player): boolean {
+  const shop = g.shop;
+  if (!shop || shop.sold || !b.seeksGun) return false;
+  const left = (g.dayTicks - g.tick) * DT;
+  const mine = shop.given[p.id]!;
+  let best = 0; // сколько сдал самый щедрый из соперников
+  for (let k = 0; k < shop.given.length; k++) {
+    if (k !== p.id && shop.given[k]! > best) best = shop.given[k]!;
+  }
+  const room = g.shopKg - shop.kg;
+  if (mine + room <= best) return false; // не обогнать: при равенстве впереди тот, кто раньше
+  // Того, что в тюке, хватит досыпать котёл и остаться первым — ружьё выйдет сразу.
+  if (p.load >= room - 1e-6) return left > 20;
+  if (left < 40) return false; // под конец дня ружьё уже не окупится
+  if (mine > best + room) return true; // впереди наверняка
+  return g.tick >= b.rushAt || best > 0;
+}
+
+/** Чужая собака, которая сейчас гонится за этим игроком (и не ползает), или null. */
+function huntingDog(g: Game, p: Player): Dog | null {
+  for (let k = 0; k < g.dogs.length; k++) {
+    const dog = g.dogs[k];
+    if (dog && dog.owner !== p.id && dog.target === p.id && dog.crawl === 0) return dog;
+  }
+  return null;
 }
 
 function pickPerk(offer: readonly number[]): number {
@@ -252,6 +459,30 @@ function pickPerk(offer: readonly number[]): number {
     if (index >= 0) return index;
   }
   return 0;
+}
+
+/**
+ * Идти к точке (x, y). На лугу — напрямую. Если на пути забор или вода — по обходному
+ * пути (карта проходимости), к самой дальней точке пути, которую видно напрямую.
+ */
+function goTo(g: Game, b: Bot, p: Player, x: number, y: number): number {
+  const nav = g.nav;
+  if (g.walls.length === 0 || lineClear(nav, p.x, p.y, x, y, 2.2)) {
+    b.wpGoal = -1;
+    return go(b, x - p.x, y - p.y);
+  }
+  const goal = Math.floor(y / 0.5) * nav.cols + Math.floor(x / 0.5);
+  const near = (b.wpx - p.x) * (b.wpx - p.x) + (b.wpy - p.y) * (b.wpy - p.y) < 0.36;
+  if (goal !== b.wpGoal || b.wpAge <= 0 || near) {
+    const spot = { x: 0, y: 0 };
+    if (!waypoint(nav, p.x, p.y, x, y, spot)) return go(b, x - p.x, y - p.y);
+    b.wpx = spot.x;
+    b.wpy = spot.y;
+    b.wpGoal = goal;
+    b.wpAge = 12;
+  }
+  b.wpAge--;
+  return go(b, b.wpx - p.x, b.wpy - p.y);
 }
 
 function go(b: Bot, dx: number, dy: number): number {
@@ -304,8 +535,18 @@ function nearestDry(g: Game, p: Player, foe: Player | null): number {
  */
 function grassAlongLane(g: Game, b: Bot, p: Player, sign: number, half: number): boolean {
   const skip = 0.8;
-  const x0 = sign > 0 ? p.x + skip : 0;
-  const x1 = sign > 0 ? g.field.size : p.x - skip;
+  let x0 = sign > 0 ? p.x + skip : 0;
+  let x1 = sign > 0 ? g.field.size : p.x - skip;
+  // Полоса кончается у забора или воды: дальше по прямой не пройти.
+  if (g.walls.length > 0) {
+    for (let x = p.x + sign * skip; x > 0 && x < g.field.size; x += sign * 0.5) {
+      if (free(g.nav, x, b.laneY)) continue;
+      if (sign > 0) x1 = x;
+      else x0 = x;
+      break;
+    }
+    if (x1 <= x0) return false;
+  }
   return standingInRect(g.field, x0, x1, b.laneY - half, b.laneY + half);
 }
 
@@ -317,6 +558,8 @@ function mowLanes(g: Game, b: Bot, p: Player): number {
   // добьёт соседняя полоса; гоняться за ними на бегу — пустая трата дня.
   const half = spacing * 0.3;
 
+  // Впереди по полосе забор или вода — дальше эту полосу не косить, как у края поля.
+  if (g.walls.length > 0 && !free(g.nav, p.x + b.laneSign * 1.2, p.y)) b.think = 0;
   if (b.think > 0) {
     b.think--;
   } else {

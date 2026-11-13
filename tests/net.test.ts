@@ -660,6 +660,20 @@ describe('сервер игры по сети', () => {
     raw.close();
   });
 
+  it('сервер в интернете называет игрокам тот адрес, который ему задали', async () => {
+    const extra = await startServer({
+      port: 0,
+      host: '127.0.0.1',
+      quiet: true,
+      root: new URL('./', import.meta.url),
+      publicUrl: 'http://example.test:8787',
+    });
+    expect(extra.lan).toBe('http://example.test:8787');
+    const ping = (await (await fetch(`http://127.0.0.1:${extra.port}/api/ping`)).json()) as { lan: string };
+    expect(ping.lan).toBe('http://example.test:8787');
+    await extra.close();
+  });
+
   it('сервер остановлен — игрок узнаёт, что связи нет', async () => {
     const extra = await startServer({ port: 0, host: '127.0.0.1', quiet: true, root: new URL('./', import.meta.url) });
     const problems: NetProblem[] = [];

@@ -13,6 +13,7 @@ export interface Tuning {
 
   // Поле
   fieldSize: number; // сторона квадратного поля, м
+  pvpFieldScale: number; // во сколько раз поле для нескольких игроков больше «справедливого»
   tuftSpacing: number; // шаг сетки кустиков, м
   tuftJitter: number; // случайный сдвиг кустика от узла сетки, м
   coverage: number; // доля поля под травой, 0…1
@@ -53,6 +54,9 @@ export interface Tuning {
   scytheSpeed: number; // множитель скорости с косой в руках: с граблями косарь быстрее
 
   // PvP
+  woundTime: number; // секунд держится рана от первого удара: второй удар за это время подрезает ноги
+  graceTime: number; // секунд после первого удара раненого нельзя ударить снова — время убежать
+  woundBoost: number; // множитель скорости раненого в эти секунды («рывок»)
   crawlTime: number; // секунд ползёт тот, кому подрезали ноги
   crawlFactor: number; // множитель скорости ползком
   shieldTime: number; // секунд неуязвимости после того, как встал
@@ -60,6 +64,29 @@ export interface Tuning {
   dropRadius: number; // упавший тюк подбирается ближе этого расстояния, м
   hitHay: number; // сколько сена удар выбивает из тюка того, кто с граблями, кг
   armorMin: number; // если в тюке меньше — он не спасает, удар приходится по ногам, кг
+
+  // Магазин в центре поля: сено → ружьё
+  shopKgEach: number; // цена ружья на каждого игрока: вчетвером — вчетверо больше, кг
+  // (ружьё получает тот, кто сдал в общий котёл больше всех)
+  shopReach: number; // ближе этого к центру ларька тюк сдаётся в ларёк (надо остановиться у прилавка), м
+  giveDwell: number; // сколько надо простоять, чтобы сено пошло в ларёк или будку, с (перехват пальца не в счёт)
+
+  // Ружьё
+  gunPeriod: number; // секунд между выстрелами (коса бьёт раз в секунду)
+  gunArcDeg: number; // ширина конуса выстрела, градусы
+  gunDogExtra: number; // на столько дальше косы ружьё достаёт собаку: косу она обходит, а ружья не боится, м
+  gunKnockback: number; // на сколько метров отбрасывает подстреленного
+  downTime: number; // секунд лежит подстреленный (подрезанный ползёт меньше)
+
+  // Будка и собака
+  kennelReach: number; // ближе этого к будке тюк сдаётся в будку (надо остановиться), м
+  dogKg: number; // сколько сена сдать в будку, чтобы появилась собака, кг
+  dogSpeed: number; // скорость собаки в погоне, м/с
+  dogGuard: number; // чужой ближе этого к стогу — собака бросается на него, м
+  dogNear: number; // и на того, кто подошёл ближе этого к ней самой, м
+  dogLeash: number; // дальше этого от стога собака не гонится, м
+  dogBitePeriod: number; // секунд между укусами
+  dogCrawlTime: number; // секунд ползает собака, которой косой подрезали ноги
 
   // Перки
   perkMaxLevel: number;
@@ -75,6 +102,7 @@ export const DEFAULT_TUNING: Tuning = {
   dayLength: 180,
 
   fieldSize: 32,
+  pvpFieldScale: 1.15,
   tuftSpacing: 0.4,
   tuftJitter: 0.15,
   coverage: 0.75,
@@ -109,6 +137,9 @@ export const DEFAULT_TUNING: Tuning = {
   swapTime: 0.4,
   scytheSpeed: 0.9,
 
+  woundTime: 8,
+  graceTime: 1.5,
+  woundBoost: 1.3,
   crawlTime: 4,
   crawlFactor: 0.35,
   shieldTime: 3,
@@ -116,6 +147,25 @@ export const DEFAULT_TUNING: Tuning = {
   dropRadius: 1.2,
   hitHay: 8,
   armorMin: 1,
+
+  shopKgEach: 15,
+  shopReach: 2.8,
+  giveDwell: 0.25,
+
+  gunPeriod: 2,
+  gunArcDeg: 60,
+  gunDogExtra: 1,
+  gunKnockback: 4,
+  downTime: 6,
+
+  kennelReach: 1.9,
+  dogKg: 25,
+  dogSpeed: 7,
+  dogGuard: 4.5,
+  dogNear: 3.5,
+  dogLeash: 9,
+  dogBitePeriod: 1.2,
+  dogCrawlTime: 5,
 
   perkMaxLevel: 5,
   arcPerLevel: 25,
@@ -170,6 +220,26 @@ export function tuningValues(t: Tuning): number[] {
     t.scytheSpeed,
     t.hitHay,
     t.armorMin,
+    t.woundTime,
+    t.graceTime,
+    t.woundBoost,
+    t.pvpFieldScale,
+    t.shopKgEach,
+    t.shopReach,
+    t.giveDwell,
+    t.gunPeriod,
+    t.gunArcDeg,
+    t.gunDogExtra,
+    t.gunKnockback,
+    t.downTime,
+    t.kennelReach,
+    t.dogKg,
+    t.dogSpeed,
+    t.dogGuard,
+    t.dogNear,
+    t.dogLeash,
+    t.dogBitePeriod,
+    t.dogCrawlTime,
     t.perkMaxLevel,
     t.arcPerLevel,
     t.reachPerLevel,

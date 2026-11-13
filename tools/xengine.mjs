@@ -47,4 +47,4 @@ if (mismatches > 0) {
   console.error(`\nРасхождений: ${mismatches}. Симуляция считает по-разному в V8 и JavaScriptCore.`);
   process.exit(1);
 }
-console.log('\nV8 и JavaScriptCore дали одинаковые хеши во всех забегах: и в одиночку, и вдвоём.');
+console.log('\nV8 и JavaScriptCore дали одинаковые хеши во всех забегах: в одиночку, вдвоём и вчетвером.');

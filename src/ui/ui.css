@@ -550,6 +550,24 @@ body {
   animation: flash 0.7s ease-out;
 }
 
+/* Ранен: слабая красная кайма, пока рана не зажила */
+#flash.wounded {
+  opacity: 0.38;
+}
+
+#flash.wounded.go {
+  animation: flash-wounded 0.7s ease-out;
+}
+
+@keyframes flash-wounded {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.38;
+  }
+}
+
 @keyframes flash {
   from {
     opacity: 1;
@@ -567,7 +585,8 @@ body {
 /* Кнопка инструмента: коса или грабли. В руках — подсвеченный. */
 #tool {
   position: fixed;
-  right: calc(var(--safe-right) + 14px);
+  /* Слева внизу — так попросил автор: под большой палец левой руки. */
+  left: calc(var(--safe-left) + 14px);
   bottom: calc(var(--safe-bottom) + 44px);
   display: flex;
   gap: 4px;
@@ -956,4 +975,160 @@ body {
   font-size: 12.5px;
   font-weight: 650;
   color: #8a6410;
+}
+
+/* Подписи над ларьком, будкой и ружьём на земле */
+.world-tag {
+  position: fixed;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 108px;
+  padding: 5px 9px 6px;
+  border-radius: 12px;
+  background: rgba(251, 246, 227, 0.94);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.world-tag[hidden] {
+  display: none;
+}
+
+.world-tag b {
+  font-size: 13px;
+}
+
+.world-tag small {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.tag-bar {
+  display: flex;
+  width: 96px;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(31, 42, 18, 0.15);
+  overflow: hidden;
+}
+
+.tag-bar i {
+  display: block;
+  height: 100%;
+}
+
+.gun-tag {
+  flex-direction: row;
+  gap: 6px;
+  min-width: 0;
+  background: #ffd23a;
+  animation: carry-pulse 0.5s ease-in-out infinite alternate;
+}
+
+.gun-tag svg,
+.edge-arrow.gun svg,
+.gun-mark svg,
+#gun-badge svg {
+  width: 30px;
+  height: 12px;
+  color: #2a2c30;
+}
+
+/* Стрелка к упавшему ружью */
+.edge-arrow.gun {
+  width: 44px;
+  height: 26px;
+  margin: -13px 0 0 -22px;
+  border-radius: 13px;
+  background: #ffd23a;
+  line-height: 26px;
+}
+
+.edge-arrow.gun[hidden] {
+  display: none;
+}
+
+.edge-arrow.gun svg {
+  vertical-align: middle;
+}
+
+/* У кого ружьё — значок рядом со счётом */
+.gun-mark {
+  display: none;
+  margin-left: 5px;
+  padding: 1px 4px;
+  border-radius: 6px;
+  background: #ffd23a;
+  vertical-align: 1px;
+}
+
+.has-gun .gun-mark {
+  display: inline-block;
+}
+
+.gun-mark svg {
+  width: 22px;
+  height: 9px;
+}
+
+/* «Ружьё твоё» — рядом с кнопкой инструмента */
+#gun-badge {
+  position: fixed;
+  left: calc(var(--safe-left) + 14px);
+  bottom: calc(var(--safe-bottom) + 132px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 14px;
+  background: #ffd23a;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  color: var(--ink);
+  font-weight: 700;
+  pointer-events: none;
+}
+
+#gun-badge[hidden] {
+  display: none;
+}
+
+#gun-badge small {
+  font-size: 13px;
+}
+
+/* Точка цвета игрока в подписи ларька: «впереди ●» */
+.world-tag .dot {
+  display: inline-block;
+  margin: 0 0 0 2px;
+  vertical-align: -1px;
+}
+
+/* Подсказка «остановись — сдашь сено» */
+.world-tag.hint {
+  background: #ffd23a;
+}
+
+.world-tag.hint small {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 1;
+}
+
+/* Ружьё за спиной (в руках грабли): плашка тусклая */
+#gun-badge.idle {
+  background: rgba(251, 246, 227, 0.92);
+}
+
+#gun-badge.idle svg {
+  opacity: 0.45;
 }

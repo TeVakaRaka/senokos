@@ -3,8 +3,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { autoplay } from '../src/sim/autoplay.ts';
-import { createGame, step, TOOL_RAKE, type Game, type Player } from '../src/sim/game.ts';
-import { fieldSizeFor, STACK_RADIUS } from '../src/sim/gen.ts';
+import { createGame, fleeing, scytheActive, step, TOOL_RAKE, type Game, type Player } from '../src/sim/game.ts';
+import { fieldSizeFor, MAP_MEADOW, STACK_RADIUS } from '../src/sim/gen.ts';
 import { derive, PERK_RAKE, PERK_REACH } from '../src/sim/perks.ts';
 import { makeReplay, runReplay } from '../src/sim/replay.ts';
 import { hashGame } from '../src/sim/hash.ts';
@@ -14,14 +14,21 @@ import { bare, EAST, layDryHay, place, run, solid, totalKg, tuftAtDistance, useR
 /**
  * Два игрока вдали от стогов: А в точке (20, 40), Б — правее на dx. Б стоит к А спиной,
  * чтобы не ударить первым (кто бьёт первым в спорном шаге — чередуется).
+ *
+ * Оба уже ранены — следующий удар подрежет ноги. Так удобнее проверять всё, что бывает
+ * после подрезания; чтобы проверить сам первый удар, передайте healthy = true.
  */
-function duel(dx: number, tuning: Tuning = bare()): { g: Game; a: Player; b: Player } {
-  const g = createGame(5, tuning, 2);
+function duel(dx: number, tuning: Tuning = bare(), healthy = false): { g: Game; a: Player; b: Player } {
+  const g = createGame(5, tuning, 2, MAP_MEADOW);
   const a = g.players[0]!;
   const b = g.players[1]!;
   place(a, 20, 40);
   place(b, 20 + dx, 40);
   b.dir = dx >= 0 ? 0 : 32;
+  if (!healthy) {
+    a.wound = g.woundTicks;
+    b.wound = g.woundTicks;
+  }
   return { g, a, b };
 }
 
@@ -42,8 +49,110 @@ describe('стоги и старт', () => {
   });
 });
 
+describe('первый удар ранит, второй подрезает ноги', () => {
+  it('первый удар только ранит: ноги целы, тюк при нём', () => {
+    const { g, a, b } = duel(1.5, bare(), true);
+    b.load = 10; // коса в руках — тюк не прикрывает, но от первого удара и не падает
+    step(g, [EAST, 0]);
+    expect(a.swing!.victim).toBe(1);
+    expect(b.woundedBy).toBe(0);
+    expect(b.wound).toBe(g.woundTicks);
+    expect(b.shield).toBe(g.graceTicks);
+    expect(b.crawl).toBe(0);
+    expect(b.hitBy).toBe(-1);
+    expect(a.hits).toBe(0);
+    expect(b.hurt).toBe(0);
+    expect(b.load).toBe(10);
+    expect(g.drops.length).toBe(0);
+  });
+
+  it('раненого полторы секунды нельзя ударить снова, и он бежит рывком', () => {
+    const { g, a, b } = duel(1.5, bare(), true);
+    step(g, [EAST, 0]);
+    expect(fleeing(b)).toBe(true);
+    // Обидчик стоит и машет, раненый убегает на восток.
+    run(g, [0, EAST], g.graceTicks - 2);
+    expect(a.hits).toBe(0);
+    expect(b.crawl).toBe(0);
+    const t = g.tuning;
+    expect(b.speed).toBeCloseTo(t.runSpeed * t.scytheSpeed * t.woundBoost, 6);
+    // Передышка кончилась — бежит как обычно, но рана ещё не зажила.
+    run(g, [0, EAST], 10);
+    expect(fleeing(b)).toBe(false);
+    expect(b.wound).toBeGreaterThan(0);
+    expect(b.speed).toBeCloseTo(t.runSpeed * t.scytheSpeed, 6);
+  });
+
+  it('пока передышка — раненый не косит и не бьёт в ответ', () => {
+    const { g, a, b } = duel(1.5, solid(), true);
+    step(g, [EAST, 0]);
+    const swings = b.swings;
+    expect(scytheActive(b)).toBe(false);
+    // Раненый разворачивается к обидчику — тот в секторе его косы, трава вокруг стоит.
+    run(g, [0, WEST], g.graceTicks - 2);
+    expect(b.swings).toBe(swings);
+    expect(a.wound).toBe(0);
+    run(g, [0, 0], 3);
+    expect(scytheActive(b)).toBe(true);
+  });
+
+  it('второй удар, пока рана не зажила, подрезает ноги', () => {
+    const { g, a, b } = duel(1.5, bare(), true);
+    step(g, [EAST, 0]);
+    run(g, 0, g.graceTicks + a.d.swingTicks); // оба стоят: передышка проходит, коса снова готова
+    expect(b.crawl).toBeGreaterThan(0);
+    expect(b.wound).toBe(0); // рана «закрыта» подрезанием
+    expect(a.hits).toBe(1);
+    expect(b.hurt).toBe(1);
+  });
+
+  it('убежать можно: рывка хватает, чтобы выйти из-под косы', () => {
+    const { g, a, b } = duel(1.5, bare(), true);
+    run(g, [EAST, EAST], 240); // раненый бежит прочь, обидчик с косой — за ним
+    expect(b.woundedBy).toBe(-1);
+    expect(b.crawl).toBe(0);
+    expect(a.hits).toBe(0);
+    expect(b.x - a.x).toBeGreaterThan(g.tuning.reach + g.tuning.heroRadius + 0.5);
+  });
+
+  it('рана заживает: потом опять нужны два удара', () => {
+    const { g, a, b } = duel(1.5, bare(), true);
+    step(g, [EAST, 0]);
+    place(a, 5, 5); // обидчик ушёл
+    run(g, 0, g.woundTicks);
+    expect(b.wound).toBe(0);
+    place(a, b.x - 1.5, b.y);
+    a.dir = 0;
+    run(g, 0, a.d.swingTicks + 1);
+    expect(b.wound).toBeGreaterThan(0); // снова только ранен
+    expect(b.crawl).toBe(0);
+    expect(a.hits).toBe(0);
+  });
+
+  it('с граблями и сеном запас ещё больше: сначала тюк, потом рана, потом ноги', () => {
+    const { g, a, b } = duel(1.5, bare(), true);
+    b.tool = TOOL_RAKE;
+    b.load = g.tuning.hitHay; // сена ровно на один удар
+    a.load = a.d.carryCap; // чтобы выбитое не мешало счёту
+    step(g, [EAST, 0]);
+    expect(b.load).toBe(0);
+    expect(b.wound).toBe(0); // первый удар пришёлся по тюку
+    run(g, 0, a.d.swingTicks);
+    expect(b.wound).toBeGreaterThan(0); // второй — ранил
+    expect(b.crawl).toBe(0);
+    run(g, 0, g.graceTicks + a.d.swingTicks);
+    expect(b.crawl).toBeGreaterThan(0); // третий — подрезал
+  });
+
+  it('если раны выключены числом баланса, ноги подрезает первый же удар', () => {
+    const { g, b } = duel(1.5, bare({ woundTime: 0 }), true);
+    step(g, [EAST, 0]);
+    expect(b.crawl).toBeGreaterThan(0);
+  });
+});
+
 describe('коса по ногам', () => {
-  it('соперник в секторе взмаха получает по ногам', () => {
+  it('раненый соперник в секторе взмаха получает по ногам', () => {
     const { g, a, b } = duel(1.5);
     step(g, [EAST, 0]);
     expect(a.swing).not.toBeNull();
@@ -135,7 +244,12 @@ describe('коса по ногам', () => {
     expect(b.crawl).toBe(0); // уже встал
     expect(b.shield).toBeGreaterThan(0); // но щит ещё действует
     run(g, 0, 3);
-    expect(a.hits).toBe(2); // щит кончился — получил снова
+    // Щит кончился — но встал он целым: новый удар только ранит.
+    expect(b.wound).toBeGreaterThan(0);
+    expect(b.crawl).toBe(0);
+    expect(a.hits).toBe(1);
+    run(g, 0, g.graceTicks + a.d.swingTicks);
+    expect(a.hits).toBe(2); // а следующий — снова по ногам
     expect(b.crawl).toBeGreaterThan(0);
   });
 
@@ -296,7 +410,7 @@ describe('упавший тюк', () => {
 
 describe('кража из чужого стога', () => {
   function atEnemyStack(): { g: Game; a: Player; b: Player } {
-    const g = createGame(5, bare(), 2);
+    const g = createGame(5, bare(), 2, MAP_MEADOW);
     const a = g.players[0]!;
     const b = g.players[1]!;
     place(a, b.stackX + STACK_RADIUS + 0.8, b.stackY);
@@ -354,7 +468,7 @@ describe('вдвоём на поле', () => {
   });
 
   it('чужой стог — такое же препятствие, как свой', () => {
-    const g = createGame(5, bare(), 2);
+    const g = createGame(5, bare(), 2, MAP_MEADOW);
     const a = g.players[0]!;
     const b = g.players[1]!;
     place(a, b.stackX - 4, b.stackY);
@@ -374,21 +488,26 @@ describe('вдвоём на поле', () => {
     expect(a.stacked).toBeGreaterThan(10);
     expect(b.stacked).toBeGreaterThan(10);
     expect(a.hits + b.hits).toBeGreaterThan(0);
-    expect(a.hits).toBe(b.hurt);
-    expect(b.hits).toBe(a.hurt);
+    // Ноги подрезает коса соперника или — вторым укусом — его собака.
+    expect(b.hurt).toBeGreaterThanOrEqual(a.hits);
+    expect(b.hurt - a.hits).toBeLessThanOrEqual(a.dogBites);
+    expect(a.hurt).toBeGreaterThanOrEqual(b.hits);
+    expect(a.hurt - b.hits).toBeLessThanOrEqual(b.dogBites);
     expect(totalKg(game)).toBeCloseTo(start + a.cutKg + b.cutKg, 6);
   });
 });
 
 describe('трое и больше', () => {
-  it('поле растёт вместе с числом игроков', () => {
-    expect(fieldSizeFor(32, 1)).toBe(32);
-    expect(fieldSizeFor(32, 2)).toBe(32);
-    expect(fieldSizeFor(32, 3)).toBe(40);
-    expect(fieldSizeFor(32, 4)).toBe(46);
+  it('поле растёт вместе с числом игроков и ещё на 15 % для простора', () => {
+    expect(fieldSizeFor(32, 1, 1.15)).toBe(32); // в одиночку поле прежнее
+    expect(fieldSizeFor(32, 2, 1.15)).toBe(37);
+    expect(fieldSizeFor(32, 3, 1.15)).toBe(45);
+    expect(fieldSizeFor(32, 4, 1.15)).toBe(52);
+    expect(fieldSizeFor(32, 4, 1)).toBe(45);
     const g = createGame(5, DEFAULT_TUNING, 3);
-    expect(g.field.size).toBe(40);
-    expect(g.tuning.fieldSize).toBe(40);
+    expect(g.field.size).toBe(45);
+    expect(g.tuning.fieldSize).toBe(45);
+    expect(createGame(5).field.size).toBe(32);
     // На каждого приходится не меньше травы, чем в игре вдвоём.
     const duelGame = createGame(5, DEFAULT_TUNING, 2);
     expect(g.field.count / 3).toBeGreaterThan((duelGame.field.count / 2) * 0.9);
@@ -414,13 +533,15 @@ describe('трое и больше', () => {
   });
 
   it('один взмах достаёт всех, кто в секторе', () => {
-    const g = createGame(5, bare(), 3);
+    const g = createGame(5, bare(), 3, MAP_MEADOW);
     const [a, b, c] = g.players as [Player, Player, Player];
     place(a, 20, 40);
     place(b, 21.5, 40.6);
     place(c, 21.5, 39.4);
     b.dir = 0; // оба стоят к первому спиной
     c.dir = 0;
+    b.wound = g.woundTicks; // оба уже ранены — удар подрежет ноги
+    c.wound = g.woundTicks;
     // Шаг, на котором первым ходит игрок 0: тогда его не опередят.
     while ((g.tick + 1) % 3 !== 0) step(g, [0, 0, 0]);
     a.dir = 0;
@@ -431,7 +552,7 @@ describe('трое и больше', () => {
   });
 
   it('ввод третьего игрока доходит до третьего', () => {
-    const g = createGame(5, bare(), 3);
+    const g = createGame(5, bare(), 3, MAP_MEADOW);
     const c = g.players[2]!;
     place(c, 10, 30);
     const x0 = c.x;

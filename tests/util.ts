@@ -8,9 +8,20 @@ export const EAST = 1; // ввод «направление 0»: вдоль +x
 export const NORTH = 17; // направление 16: вдоль +y
 export const WEST = 33; // направление 32: вдоль −x
 
-/** Сплошное большое поле без камней, голых пятен и вчерашнего покоса. */
+/**
+ * Сплошное большое поле без камней, голых пятен и вчерашнего покоса. Поле для нескольких
+ * игроков не растёт — так в тестах стоги стоят на одних и тех же местах при любом числе игроков.
+ */
 export function solid(patch: Partial<Tuning> = {}): Tuning {
-  return { ...cloneTuning(DEFAULT_TUNING), fieldSize: 64, coverage: 1.5, rockCount: 0, yesterdayKg: 0, ...patch };
+  return {
+    ...cloneTuning(DEFAULT_TUNING),
+    fieldSize: 64,
+    pvpFieldScale: 1,
+    coverage: 1.5,
+    rockCount: 0,
+    yesterdayKg: 0,
+    ...patch,
+  };
 }
 
 /** Голое поле: ни травы, ни камней. Удобно проверять движение и PvP без косьбы. */
@@ -75,9 +86,14 @@ export function tuftAtDistance(g: Game, x: number, y: number, min: number, max: 
   throw new Error('нет кустика на нужном расстоянии');
 }
 
-/** Всё сено в игре: на земле, в упавших тюках, в тюках игроков и в стогах. */
+/**
+ * Всё сено в игре: на земле, в упавших тюках, в тюках игроков, в стогах, в магазине,
+ * в будках и отданное за собак.
+ */
 export function totalKg(g: Game): number {
-  let kg = groundKg(g) + dropsKg(g);
+  let kg = groundKg(g) + dropsKg(g) + g.spentKg;
   for (const p of g.players) kg += p.load + p.stacked;
+  if (g.shop) kg += g.shop.kg;
+  for (const k of g.kennels) kg += k.kg;
   return kg;
 }

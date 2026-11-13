@@ -26,6 +26,8 @@ export interface ServerOptions {
   root?: string | URL;
   /** Не печатать журнал. */
   quiet?: boolean;
+  /** Адрес, который сервер называет игрокам (если не задан — адрес этого компьютера в сети). */
+  publicUrl?: string;
 }
 
 export function startServer(options?: ServerOptions): Promise<GameServer>;

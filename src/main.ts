@@ -5,6 +5,7 @@
 //                        (по умолчанию — как в прошлый раз; net работает, когда игру
 //                        раздаёт сервер из tools/server.mjs: npm run host)
 //   ?room=имя      — комната для игры по сети (по умолчанию одна на сервер)
+//   ?map=meadow|fences|river — локация для игры с ботом (по умолчанию её выбирает зерно)
 //   ?go=1          — начать сразу, без заставки
 //   ?seed=123      — зерно поля (по умолчанию — номер сегодняшнего дня)
 //   ?auto=1        — за игрока играет бот
@@ -18,6 +19,7 @@ import { autoplay } from './sim/autoplay.ts';
 import { botInput, createBot, type Bot } from './sim/bot.ts';
 import { nearestTuft, standingWithin } from './sim/field.ts';
 import { createGame, INPUT_SWAP, step, TOOL_RAKE, TOOL_SCYTHE, type Game, type Player } from './sim/game.ts';
+import { MAP_FENCES, MAP_MEADOW, MAP_RIVER } from './sim/gen.ts';
 import { dropsKg, groundKg, isDry } from './sim/hay.ts';
 import { CHOICE_BASE } from './sim/perks.ts';
 import { hashGame, hashTuning, hex8 } from './sim/hash.ts';
@@ -395,7 +397,9 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
   const pvp = readPvp();
   // По сети числа баланса у всех обязаны совпадать — отладочные ползунки там не действуют.
   const tuning = net ? cloneTuning(DEFAULT_TUNING) : loadTuning();
-  const game = createGame(seed, tuning, setup.players);
+  // Локацию выбирает зерно (по сети — у всех одинаково); в игре с ботом её можно задать адресом.
+  const asked = ['meadow', 'fences', 'river'].indexOf(params.get('map') ?? '');
+  const game = createGame(seed, tuning, setup.players, net ? -1 : asked);
   const me = game.players[ME]!;
   const autopilot = params.has('auto');
   // За кого играют боты: за соперника — когда он не человек; за своего — только в режиме показа.
@@ -603,6 +607,17 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
       platform.haptic('heavy');
       toast.show(`Выбил ${Math.round(fx.knock)} кг сена из тюка!`, 'good');
     }
+    if (fx.woundedFoe) {
+      sound.slash();
+      platform.haptic('heavy');
+      toast.show('Ранил! Добей, пока рана не зажила', 'good');
+    }
+    if (fx.wounded) {
+      sound.ouch();
+      platform.haptic('heavy');
+      hud.flash();
+      toast.show('Ранен! Второй удар подрежет ноги — беги', 'bad');
+    }
     if (fx.hurt) {
       sound.ouch();
       platform.haptic('heavy');
@@ -620,6 +635,66 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
       toast.show(`${who(fx.robber)} тащит сено из твоего стога!`, 'bad', 4000);
     }
     if (fx.stole > 0) toast.show('Тащишь сено из чужого стога', 'good', 6000);
+
+    // Ружьё.
+    if (fx.shotFired) {
+      sound.bang();
+      platform.haptic('heavy');
+      if (fx.shotFoe) toast.show('Подстрелил! Лежит долго — забирай его тюк', 'good');
+      if (fx.shotDog) toast.show('Собака застрелена', 'good');
+    }
+    if (fx.foeShot > 0) sound.bang(fx.foeShot);
+    if (fx.shotMe) {
+      sound.ouch();
+      platform.haptic('heavy');
+      hud.flash();
+      toast.show('Тебя подстрелили! Лежишь…', 'bad');
+    }
+    if (fx.gotGun) {
+      sound.ching();
+      toast.show('Ружьё твоё! Стреляет само, пока в руках коса', 'good');
+    }
+    if (fx.lostGun) toast.show('Ружьё выпало!', 'bad');
+    if (fx.gunTaken >= 0) toast.show(`Ружьё у ${whose(fx.gunTaken)}!`, 'bad');
+    if (fx.gunDropped && !fx.gotGun) toast.show('Ружьё упало — хватай!', 'good');
+    if (fx.shopGive > 0 && game.shop) {
+      sound.thump();
+      toast.show(`В ларёк: ${Math.floor(game.shop.kg)} из ${game.shopKg} кг. Ружьё — кто сдал больше всех`, 'plain', 1500);
+    }
+
+    // Собаки.
+    if (fx.kennelGive > 0) {
+      sound.thump();
+      const kennel = game.kennels[ME];
+      if (kennel && !fx.dogBorn) toast.show(`В будку: ${Math.floor(kennel.kg)} из ${game.tuning.dogKg} кг`, 'plain', 1500);
+    }
+    if (fx.dogBorn) {
+      sound.bark(0.8);
+      toast.show('Собака готова — сторожит твой стог', 'good');
+    }
+    if (fx.bark > 0) sound.bark(fx.bark);
+    if (fx.dogBitMe) {
+      sound.bite();
+      platform.haptic('heavy');
+      hud.flash();
+      if (fx.dogCutMe) {
+        // Второй укус: ноги подрезаны, бежать уже поздно.
+        sound.ouch();
+        toast.show('Собака подрезала тебе ноги! Ползи к своему стогу', 'bad');
+      } else {
+        toast.show(fx.dogTore > 0.5 ? 'Собака! Вырвала тюк — беги от её стога' : 'Собака укусила! Беги от её стога', 'bad');
+      }
+    }
+    if (fx.myDogBit) toast.show('Твоя собака кусает вора!', 'good', 3000);
+    if (fx.cutDog) {
+      sound.yelp();
+      toast.show('Подрезал собаке лапы', 'good');
+    }
+    if (fx.myDogHurt) {
+      sound.yelp();
+      toast.show('Твоей собаке подрезали лапы', 'bad');
+    }
+    if (fx.myDogDied) toast.show('Твою собаку застрелили', 'bad');
   }
 
   /** Один шаг симуляции (или выбор улучшения) вместе с эффектами, звуком и вибрацией. */
@@ -780,6 +855,8 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
           knocked: me.knocked,
           stolen: me.stolen,
           lost: me.robbed,
+          shot: me.shotHits,
+          shotDown: me.shotDown,
           perks: me.level,
           wins: setup.counted ? pvp.wins : 0,
           games: setup.counted ? pvp.games : 0,
@@ -810,8 +887,16 @@ function startGame(platformReady: Promise<void>, setup: Setup): void {
     update(now);
   }
 
+  let announced = false; // подсказка о локации уже показана
+
   /** Один кадр: шаги симуляции за прошедшее время, экраны ожидания, картинка. */
   function update(now: number): void {
+    if (started && !announced) {
+      announced = true;
+      if (game.map === MAP_FENCES) toast.show('Огороды: заборы и загоны — путай соперника', 'plain');
+      else if (game.map === MAP_RIVER) toast.show('Река: переходи по мостам, ларёк — на среднем', 'plain');
+      else if (duel && game.map === MAP_MEADOW) toast.show('Луг: открытое поле', 'plain');
+    }
     let dt = (now - last) / 1000;
     last = now;
     if (dt > 0.25) dt = 0.25; // вкладка была свёрнута или кадр завис — не догоняем рывком
@@ -1048,6 +1133,9 @@ async function openDebugPanel(current: Tuning): Promise<void> {
   gui.add(draft, 'rakeRadius', 0.5, 3, 0.1).name('ширина граблей, м');
   gui.add(draft, 'yesterdayKg', 0, 40, 1).name('вчерашнее сено, кг');
   gui.add(draft, 'swapTime', 0, 1.5, 0.05).name('смена инструмента, с');
+  gui.add(draft, 'woundTime', 0, 20, 1).name('рана держится, с (0 — без ран)');
+  gui.add(draft, 'graceTime', 0, 4, 0.25).name('передышка раненого, с');
+  gui.add(draft, 'woundBoost', 1, 2, 0.05).name('рывок раненого, множитель');
   gui.add(draft, 'crawlTime', 1, 10, 0.5).name('ползёт, с');
   gui.add(draft, 'crawlFactor', 0.1, 1, 0.05).name('ползком, множитель');
   gui.add(draft, 'shieldTime', 0, 8, 0.5).name('неуязвим после, с');

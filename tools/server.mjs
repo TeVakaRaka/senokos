@@ -451,7 +451,9 @@ export async function startServer(options = {}) {
     });
   });
   const actualPort = server.address().port;
-  lan = lanUrl(actualPort);
+  // Адрес, который сервер называет игрокам. На сервере в интернете его задают явно:
+  // сам он видит только свои сетевые карты и может назвать не ту.
+  lan = typeof options.publicUrl === 'string' && options.publicUrl ? options.publicUrl : lanUrl(actualPort);
 
   return {
     port: actualPort,

@@ -1,4 +1,5 @@
-// Летящие клочки: трава от взмаха, сено из-под граблей в тюк и из тюка в стог, брызги крови.
+// Летящие клочки: трава от взмаха, сено из-под граблей в тюк и из тюка в стог, брызги крови,
+// дробь из ружья.
 // Чисто для глаз: на счёт не влияют.
 
 import * as THREE from 'three';
@@ -110,6 +111,35 @@ export class CutBits {
           age: 0,
           life: 0.5 + Math.random() * 0.45,
           gravity: 12,
+        },
+        this.color,
+      );
+    }
+  }
+
+  /**
+   * Дробь: быстрые искры веером из точки (x, y, z) в сторону (dirX, dirZ), до range метров.
+   * halfArc — половина ширины веера, радианы.
+   */
+  spray(x: number, y: number, z: number, dirX: number, dirZ: number, halfArc: number, range: number, amount: number, color: number): void {
+    this.color.setHex(color);
+    const base = Math.atan2(dirZ, dirX);
+    for (let i = 0; i < amount; i++) {
+      const a = base + (Math.random() * 2 - 1) * halfArc;
+      const life = 0.1 + Math.random() * 0.08;
+      const speed = (range * (0.75 + Math.random() * 0.35)) / life;
+      this.push(
+        {
+          x,
+          y,
+          z,
+          vx: Math.cos(a) * speed,
+          vy: (Math.random() - 0.3) * 1.5,
+          vz: Math.sin(a) * speed,
+          spin: (Math.random() - 0.5) * 30,
+          age: 0,
+          life,
+          gravity: 2,
         },
         this.color,
       );

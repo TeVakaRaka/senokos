@@ -16,6 +16,7 @@ const pad = (v, n) => String(v).padStart(n);
 
 function play(seed) {
   const g = createGame(seed, undefined, count);
+  let gunAt = -1; // когда вышло ружьё, с
   const bots = g.players.map((p) => createBot(seed, p.id));
   const time = g.players.map(() => ({ mow: 0, rake: 0, haul: 0, walk: 0, idle: 0, crawl: 0 }));
   let firstPerk = -1;
@@ -25,6 +26,7 @@ function play(seed) {
     for (let i = 0; i < count; i++) inputs[i] = botInput(g, bots[i]);
     const before = g.tick;
     step(g, inputs);
+    if (gunAt < 0 && g.gun) gunAt = g.tick * DT;
     if (g.tick === before) {
       if (firstPerk < 0) firstPerk = g.tick * DT;
       continue; // шаг ушёл на выбор улучшения
@@ -40,7 +42,7 @@ function play(seed) {
       else t.walk++;
     }
   }
-  return { g, time, firstPerk };
+  return { g, time, firstPerk, gunAt };
 }
 
 const pct = (v, ticks) => `${Math.round((v / ticks) * 100)}%`.padStart(5);
@@ -73,10 +75,13 @@ if (!pvp) {
       `ходит ${(avg(sum.walk) * 100).toFixed(0)}%, стоит ${(avg(sum.idle) * 100).toFixed(0)}%.`,
   );
 } else {
-  const sum = { a: 0, b: 0, hitsA: 0, hitsB: 0, stolenA: 0, stolenB: 0, winA: 0, winB: 0, draw: 0, crawl: 0, perks: 0 };
-  console.log('зерно  стог А  стог Б  подрезал А/Б  украл А/Б   улучш. А/Б  ползал А/Б  на земле  победил');
+  const sum = {
+    a: 0, b: 0, hitsA: 0, hitsB: 0, stolenA: 0, stolenB: 0, winA: 0, winB: 0, draw: 0, crawl: 0, perks: 0,
+    guns: 0, gunAt: 0, shots: 0, dogs: 0, bites: 0, dogsKilled: 0, shop: 0,
+  };
+  console.log('зерно  стог А  стог Б  подрезал А/Б  украл А/Б   улучш. А/Б  ползал А/Б  ружьё  выстр.  собак  укусов  победил');
   for (let seed = 1; seed <= seeds; seed++) {
-    const { g, time } = play(seed);
+    const { g, time, gunAt } = play(seed);
     const [a, b] = g.players;
     const left = groundKg(g) + dropsKg(g) + a.load + b.load;
     const winner = Math.abs(a.stacked - b.stacked) < 0.5 ? 'ничья' : a.stacked > b.stacked ? 'А' : 'Б';
@@ -88,11 +93,23 @@ if (!pvp) {
     sum.stolenB += b.stolen;
     sum.perks += (a.level + b.level) / 2;
     sum.crawl += (time[0].crawl + time[1].crawl) / 2 / g.tick;
+    const shots = a.shotHits + b.shotHits;
+    const dogs = Math.round(g.spentKg / g.tuning.dogKg);
+    const bites = a.dogBites + b.dogBites;
+    if (gunAt >= 0) {
+      sum.guns++;
+      sum.gunAt += gunAt;
+    }
+    sum.shots += shots;
+    sum.dogs += dogs;
+    sum.bites += bites;
+    sum.dogsKilled += a.dogsKilled + b.dogsKilled;
+    sum.shop += g.shop ? g.shop.kg : 0;
     if (winner === 'А') sum.winA++;
     else if (winner === 'Б') sum.winB++;
     else sum.draw++;
     console.log(
-      `${pad(seed, 5)}  ${pad(a.stacked.toFixed(0), 4)} кг  ${pad(b.stacked.toFixed(0), 4)} кг  ${pad(`${a.hits}/${b.hits}`, 12)}  ${pad(`${a.stolen.toFixed(0)}/${b.stolen.toFixed(0)}`, 9)} кг  ${pad(`${a.level}/${b.level}`, 10)}  ${pad(`${pct(time[0].crawl, g.tick).trim()}/${pct(time[1].crawl, g.tick).trim()}`, 10)}  ${pad(left.toFixed(0), 5)} кг  ${winner}`,
+      `${pad(seed, 5)}  ${pad(a.stacked.toFixed(0), 4)} кг  ${pad(b.stacked.toFixed(0), 4)} кг  ${pad(`${a.hits}/${b.hits}`, 12)}  ${pad(`${a.stolen.toFixed(0)}/${b.stolen.toFixed(0)}`, 9)} кг  ${pad(`${a.level}/${b.level}`, 10)}  ${pad(`${pct(time[0].crawl, g.tick).trim()}/${pct(time[1].crawl, g.tick).trim()}`, 10)}  ${pad(gunAt >= 0 ? `${gunAt.toFixed(0)} с` : '—', 5)}  ${pad(shots, 6)}  ${pad(dogs, 5)}  ${pad(bites, 6)}  ${winner}`,
     );
   }
   console.log(
@@ -100,4 +117,9 @@ if (!pvp) {
       `украдено ${avg(sum.stolenA + sum.stolenB).toFixed(0)} кг; улучшений ${avg(sum.perks).toFixed(1)}; ползком ${(avg(sum.crawl) * 100).toFixed(0)}% времени.`,
   );
   console.log(`Победы: А ${sum.winA}, Б ${sum.winB}, ничьих ${sum.draw}.`);
+  console.log(
+    `Ружьё вышло в ${sum.guns} днях из ${seeds}${sum.guns ? `, в среднем на ${(sum.gunAt / sum.guns).toFixed(0)}-й секунде` : ''}; ` +
+      `в магазин сдано в среднем ${avg(sum.shop).toFixed(0)} кг; выстрелов в цель ${avg(sum.shots).toFixed(1)} за день; ` +
+      `собак куплено ${avg(sum.dogs).toFixed(1)}, укусов ${avg(sum.bites).toFixed(1)}, застрелено собак ${avg(sum.dogsKilled).toFixed(1)}.`,
+  );
 }

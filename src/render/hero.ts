@@ -1,9 +1,14 @@
 // Косарь из простых фигур и след взмаха косы. Анимация процедурная: шаг, покачивание,
-// взмах, смена инструмента, ползком с подрезанными ногами.
+// взмах, смена инструмента, ползком с подрезанными ногами, ружьё за спиной и выстрел,
+// полёт от выстрела и лёжа на спине.
 
 import * as THREE from 'three';
 import { TOOL_RAKE } from '../sim/game.ts';
+import { buildGun } from './arms.ts';
 import { baleScale, buildBale } from './props.ts';
+
+const AIM_TIME = 0.55; // секунд ружьё держит у бедра после выстрела
+const FLASH_TIME = 0.07; // секунд видна вспышка у дула
 
 const SWING_TIME = 0.2; // секунд длится взмах на экране
 const SWOOSH_TIME = 0.32; // секунд виден белый след
@@ -20,6 +25,9 @@ export interface HeroPose {
   combo: boolean; // «синтез»: работают и коса, и грабли
   crawling: boolean; // ноги подрезаны
   shielded: boolean; // только что встал и пока неуязвим
+  gun: boolean; // при нём ружьё
+  flying: number; // 0…1 — летит, отброшенный выстрелом (0 — не летит)
+  down: boolean; // лежит после выстрела
 }
 
 export class HeroView {
@@ -28,7 +36,14 @@ export class HeroView {
   /** Отрезанные ноги: лежат там, где подрезали, пока косарь ползёт. Живут в сцене, не в группе. */
   readonly lostLegs = new THREE.Group();
 
+  /** Всё тело целиком (ноги и туловище): его опрокидывают, когда косаря подстрелили. */
+  private readonly figure = new THREE.Group();
   private readonly body = new THREE.Group();
+  private readonly gun: THREE.Group;
+  private readonly flash: THREE.Mesh;
+  private aim = 0; // 1 — только что выстрелил: ружьё у бедра
+  private flashAge = 10;
+  private downMix = 0; // 0 — на ногах, 1 — лежит на спине (плавно)
   private readonly legL: THREE.Mesh;
   private readonly legR: THREE.Mesh;
   private readonly scythe = new THREE.Group();
@@ -58,7 +73,7 @@ export class HeroView {
     this.legR = new THREE.Mesh(legGeo, pants);
     this.legL.position.set(0, 0.5, -0.11);
     this.legR.position.set(0, 0.5, 0.11);
-    this.group.add(this.legL, this.legR);
+    this.figure.add(this.legL, this.legR);
 
     // Туловище, голова, шляпа с лентой
     const shirt = lambert(color);
@@ -97,7 +112,19 @@ export class HeroView {
     this.scythe.add(snath, blade);
     this.body.add(this.scythe);
 
-    this.group.add(this.body);
+    // Ружьё: за спиной наискосок; при выстреле — у бедра, стволом вперёд.
+    this.gun = buildGun();
+    this.gun.visible = false;
+    this.flash = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.16, 0),
+      new THREE.MeshBasicMaterial({ color: 0xfff0a0, transparent: true, opacity: 0.95, depthWrite: false }),
+    );
+    this.flash.visible = false;
+    this.gun.getObjectByName('muzzle')!.add(this.flash);
+    this.body.add(this.gun);
+
+    this.figure.add(this.body);
+    this.group.add(this.figure);
 
     // Грабли-волокуша: косарь тащит их за собой. Поперечина с зубьями (её ширина —
     // ширина граблей в игре) на черенке; сгребённое сено собирается за ней в тюк.
@@ -206,6 +233,12 @@ export class HeroView {
     this.swoosh.visible = true;
   }
 
+  /** Выстрел: ружьё к бедру, вспышка у дула, отдача. */
+  fire(): void {
+    this.aim = 1;
+    this.flashAge = 0;
+  }
+
   /** Подрезали ноги: они остаются лежать на этом месте. */
   dropLegs(x: number, z: number): void {
     this.lostLegs.position.set(x, 0, z);
@@ -312,8 +345,29 @@ export class HeroView {
       }
     }
 
+    // Ружьё за спиной; после выстрела — у правого бедра стволом вперёд, потом обратно.
+    this.gun.visible = pose.gun;
+    this.aim = Math.max(0, this.aim - dt / AIM_TIME);
+    const a = this.aim > 0.6 ? 1 : this.aim / 0.6; // быстро вскинул, медленно убрал
+    this.gun.position.set(-0.22 + 0.36 * a, 1.0 - 0.08 * a, 0.02 + 0.22 * a);
+    this.gun.rotation.set((-Math.PI / 4) * (1 - a), (-Math.PI / 2) * (1 - a), 0);
+    this.flashAge += dt;
+    this.flash.visible = this.flashAge < FLASH_TIME;
+    if (this.flash.visible) this.flash.scale.setScalar(1 + this.flashAge * 12);
+    if (this.aim > 0.85) this.body.position.x -= 0.1 * (this.aim - 0.85) * 6; // отдача
+
+    // Подстрелили: летит назад, кувыркаясь, и лежит на спине.
+    this.downMix += ((pose.down ? 1 : 0) - this.downMix) * (1 - Math.exp(-dt * (pose.down ? 14 : 5)));
+    const fly = pose.flying;
+    this.figure.rotation.z = (Math.PI / 2) * this.downMix + fly * 2.2;
+    this.figure.position.y = Math.sin(fly * Math.PI) * 0.9 + 0.12 * this.downMix;
+    if (this.downMix > 0.5) {
+      this.scythe.visible = false;
+      this.rake.visible = false;
+    }
+
     // Только что встал: мигает, пока его нельзя подрезать снова.
-    this.group.visible = !(pose.shielded && !pose.crawling && Math.floor(time * 11) % 2 === 0);
+    this.group.visible = !(pose.shielded && !pose.crawling && !pose.down && Math.floor(time * 11) % 2 === 0);
     if (!pose.crawling && this.lostLegs.visible) this.lostLegs.visible = false;
 
     // След

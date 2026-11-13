@@ -3,6 +3,8 @@
 // выгружается. В PvP тюк можно выронить (если подрезали ноги) и подобрать чужой,
 // а граблями — вытаскивать сено из чужого стога.
 
+import { giveShop } from './arms.ts';
+import { giveKennel } from './dog.ts';
 import { cellCoord } from './field.ts';
 import type { Game, Player } from './game.ts';
 import { DT } from './tuning.ts';
@@ -134,13 +136,20 @@ export function raid(g: Game, p: Player): void {
   }
 }
 
-/** У своего стога тюк выгружается сам. */
+/**
+ * У своего стога тюк выгружается сам, на ходу. У прилавка ларька — в ларёк, у своей будки —
+ * в будку, но только если там остановиться: на ходу сено туда не уходит, чтобы не отдать
+ * его случайно, пробегая мимо.
+ */
 export function unload(g: Game, p: Player): void {
   if (p.load <= 0) return;
   const dx = p.x - p.stackX;
   const dy = p.y - p.stackY;
   const r = g.tuning.stackReach;
-  if (dx * dx + dy * dy > r * r) return;
+  if (dx * dx + dy * dy > r * r) {
+    if (!giveShop(g, p)) giveKennel(g, p);
+    return;
+  }
   const chunk = g.tuning.unloadRate * DT;
   let kg: number;
   if (p.load <= chunk) {

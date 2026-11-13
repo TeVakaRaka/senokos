@@ -2,7 +2,8 @@
 // время до конца дня, полоска тюка над героем и стрелки у края экрана — к своему стогу
 // и к соперникам.
 
-import type { Game } from '../sim/game.ts';
+import { shopLeader } from '../sim/arms.ts';
+import { TOOL_SCYTHE, type Game } from '../sim/game.ts';
 import { levelThreshold } from '../sim/perks.ts';
 import { DT } from '../sim/tuning.ts';
 import type { View } from '../render/view.ts';
@@ -20,9 +21,35 @@ const ALARM_MS = 2500; // сколько стрелка к стогу остаё
 /** Соперник на экране: его счёт в плашке и стрелка к нему. */
 interface Foe {
   index: number;
+  item: HTMLElement;
   kg: HTMLElement;
   lastKg: number;
   arrow: HTMLElement;
+}
+
+/** Значок ружья (силуэт двустволки). */
+export const GUN_ICON = '<svg viewBox="0 0 32 12" aria-hidden="true"><path d="M1.5 10.5 7.5 6.2H30v2.3H11.4l-1.9 2.3z" fill="currentColor"/><path d="M12 8.5h3.2l-.8 2.6h-2.9z" fill="currentColor"/></svg>';
+
+/** Подпись над предметом на поле: заголовок, полоска сбора и число. */
+interface Tag {
+  root: HTMLElement;
+  bar: HTMLElement;
+  text: HTMLElement;
+  key: string;
+}
+
+function makeTag(className: string, title: string): Tag {
+  const root = document.createElement('div');
+  root.className = `world-tag ${className}`;
+  root.setAttribute('aria-hidden', 'true');
+  const head = document.createElement('b');
+  head.textContent = title;
+  const bar = document.createElement('span');
+  bar.className = 'tag-bar';
+  const text = document.createElement('small');
+  root.append(head, bar, text);
+  document.body.append(root);
+  return { root, bar, text, key: '' };
 }
 
 export class Hud {
@@ -36,6 +63,14 @@ export class Hud {
   private readonly flashEl = $('flash');
   private readonly me: number;
   private readonly foes: Foe[] = [];
+  private readonly meItem = $('hud-stack');
+  private readonly shopTag: Tag;
+  private readonly kennelTag: Tag;
+  private readonly gunTag: HTMLElement;
+  private readonly gunArrow: HTMLElement;
+  private readonly gunBadge: HTMLElement;
+  private readonly gunBadgeText: HTMLElement;
+  private gunKey = '';
   private lastKg = -1;
   private lastSeconds = -1;
   private alarmUntil = 0;
@@ -50,6 +85,26 @@ export class Hud {
     this.root.classList.toggle('duel', duel);
     const foeBox = $('hud-foe');
     foeBox.hidden = !duel;
+
+    // Подписи над ларьком, своей будкой и упавшим ружьём, стрелка к ружью, значок «ружьё твоё».
+    this.shopTag = makeTag('shop-tag', 'Ружьё');
+    this.kennelTag = makeTag('kennel-tag', 'Собака');
+    this.gunTag = document.createElement('div');
+    this.gunTag.className = 'world-tag gun-tag';
+    this.gunTag.innerHTML = `${GUN_ICON}<b>Ружьё — подбери!</b>`;
+    document.body.append(this.gunTag);
+    this.gunArrow = document.createElement('div');
+    this.gunArrow.className = 'edge-arrow gun';
+    this.gunArrow.innerHTML = GUN_ICON;
+    this.root.before(this.gunArrow);
+    this.gunBadge = $('gun-badge');
+    this.gunBadge.innerHTML = `${GUN_ICON}<small></small>`;
+    this.gunBadgeText = this.gunBadge.querySelector('small')!;
+    for (const el of [this.shopTag.root, this.kennelTag.root, this.gunTag, this.gunArrow, this.gunBadge]) el.hidden = true;
+    const mark = document.createElement('span');
+    mark.className = 'gun-mark';
+    mark.innerHTML = GUN_ICON;
+    $('hud-stack').querySelector('.hud-stack-line')!.append(mark);
     if (!duel) return;
 
     $('hud-stack-label').textContent = 'кг у тебя';
@@ -65,7 +120,10 @@ export class Hud {
       dot.style.background = playerCss(k);
       const kg = document.createElement('b');
       kg.textContent = '0';
-      item.append(dot, ' ', kg);
+      const gunMark = document.createElement('span');
+      gunMark.className = 'gun-mark';
+      gunMark.innerHTML = GUN_ICON;
+      item.append(dot, ' ', kg, gunMark);
       foeBox.append(item);
 
       // Стрелка к сопернику — его цвета. Кладём под плашками, чтобы не лезла поверх окон.
@@ -76,7 +134,7 @@ export class Hud {
       arrow.setAttribute('aria-hidden', 'true');
       this.root.before(arrow);
 
-      this.foes.push({ index: k, kg, lastKg: -1, arrow });
+      this.foes.push({ index: k, item, kg, lastKg: -1, arrow });
     }
     if (this.foes.length === 1) {
       const label = document.createElement('small');
@@ -111,6 +169,9 @@ export class Hud {
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
 
+    // Пока рана не зажила, края экрана остаются красноватыми: второй удар подрежет ноги.
+    this.flashEl.classList.toggle('wounded', p.wound > 0 && p.crawl === 0 && !game.over);
+
     this.updateCarry(game, view);
 
     // Стрелка к своему стогу: когда есть что везти или когда стог грабят.
@@ -128,6 +189,99 @@ export class Hud {
       }
       const s = view.worldToScreen(q.x, 1, q.y);
       this.pointTo(foe.arrow, s.x, s.y, w, h, !game.over);
+    }
+
+    this.updateArms(game, view, w, h);
+  }
+
+  /** Ларёк, будка, ружьё: подписи над ними, стрелка к упавшему ружью, у кого ружьё. */
+  private updateArms(game: Game, view: View, w: number, h: number): void {
+    const p = game.players[this.me]!;
+    const gun = game.gun;
+    const shop = game.shop;
+
+    // Над ларьком: сколько сена собрано и кто сколько сдал (полоска из цветных кусков).
+    const shopTag = this.shopTag;
+    if (shop && !shop.sold && !game.over) {
+      const s = view.worldToScreen(shop.x, 4.1, shop.y);
+      shopTag.root.hidden = !(s.inFront && s.x > -60 && s.x < w + 60 && s.y > -40 && s.y < h + 40);
+      shopTag.root.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
+      // С тюком у прилавка на ходу — подсказка: сено уходит, только когда стоишь. Показываем
+      // её ровно там, где остановка сработает.
+      const dx = p.x - shop.x;
+      const dy = p.y - shop.y;
+      const near = game.tuning.shopReach;
+      const hint = p.load > 0.05 && p.speed > 0 && dx * dx + dy * dy < near * near;
+      const leader = shopLeader(shop);
+      const key = `${shop.given.map((v) => Math.floor(v)).join('|')}|${leader}|${hint}`;
+      if (key !== shopTag.key) {
+        shopTag.key = key;
+        shopTag.bar.textContent = '';
+        shop.given.forEach((kg, k) => {
+          if (kg <= 0) return;
+          const seg = document.createElement('i');
+          seg.style.width = `${(kg / game.shopKg) * 100}%`;
+          seg.style.background = playerCss(k);
+          shopTag.bar.append(seg);
+        });
+        // Ружьё получит тот, кто сдал больше всех: показываем, кто сейчас впереди.
+        const ahead =
+          leader < 0 ? ' сена' : leader === this.me ? ' · впереди ты' : ` · впереди <i class="dot" style="background:${playerCss(leader)}"></i>`;
+        shopTag.text.innerHTML = hint ? 'остановись — сдашь сено' : `${Math.floor(shop.kg)} из ${game.shopKg} кг${ahead}`;
+        shopTag.root.classList.toggle('hint', hint);
+      }
+    } else {
+      shopTag.root.hidden = true;
+    }
+
+    // Над своей будкой: сколько сена до собаки (пока собаки нет).
+    const kennel = game.kennels[this.me];
+    const kennelTag = this.kennelTag;
+    if (kennel && !game.dogs[this.me] && !game.over) {
+      const s = view.worldToScreen(kennel.x, 1.6, kennel.y);
+      kennelTag.root.hidden = !(s.inFront && s.x > -60 && s.x < w + 60 && s.y > -40 && s.y < h + 40);
+      kennelTag.root.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
+      const dx = p.x - kennel.x;
+      const dy = p.y - kennel.y;
+      const near = game.tuning.kennelReach;
+      const hint = p.load > 0.05 && p.speed > 0 && dx * dx + dy * dy < near * near;
+      const key = `${Math.floor(kennel.kg)}|${hint}`;
+      if (key !== kennelTag.key) {
+        kennelTag.key = key;
+        kennelTag.bar.innerHTML = `<i style="width:${(kennel.kg / game.tuning.dogKg) * 100}%;background:${playerCss(this.me)}"></i>`;
+        kennelTag.text.textContent = hint ? 'остановись — сдашь сено' : `${Math.floor(kennel.kg)} из ${game.tuning.dogKg} кг сена`;
+        kennelTag.root.classList.toggle('hint', hint);
+      }
+    } else {
+      kennelTag.root.hidden = true;
+    }
+
+    // Ружьё на земле: подпись над ним и стрелка у края экрана, если его не видно.
+    const lying = gun !== null && gun.holder < 0 && !game.over;
+    if (lying) {
+      const s = view.worldToScreen(gun.x, 1.1, gun.y);
+      const inside = s.x > 0 && s.x < w && s.y > 60 && s.y < h;
+      this.gunTag.hidden = !inside;
+      this.gunTag.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -100%)`;
+      this.pointTo(this.gunArrow, s.x, s.y, w, h, true);
+      this.gunArrow.hidden = false;
+    } else {
+      this.gunTag.hidden = true;
+      this.gunArrow.hidden = true;
+    }
+
+    // У кого ружьё: значок в плашке счёта, а если оно твоё — плашка у кнопки инструмента.
+    // Ружьё стреляет только с косой в руках: с граблями плашка тускнеет и просит взять косу.
+    const holder = gun ? gun.holder : -1;
+    const ready = p.tool === TOOL_SCYTHE || p.d.combo;
+    const key = `${holder}|${game.over}|${ready}`;
+    if (key !== this.gunKey) {
+      this.gunKey = key;
+      this.meItem.classList.toggle('has-gun', holder === this.me);
+      for (const foe of this.foes) foe.item.classList.toggle('has-gun', holder === foe.index);
+      this.gunBadge.hidden = holder !== this.me || game.over;
+      this.gunBadge.classList.toggle('idle', !ready);
+      this.gunBadgeText.textContent = ready ? 'Ружьё стреляет само' : 'Возьми косу — выстрелит';
     }
   }
 

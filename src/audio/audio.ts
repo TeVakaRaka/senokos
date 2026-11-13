@@ -117,6 +117,43 @@ export class Sound {
     osc.stop(t + 0.2);
   }
 
+  /** Выстрел из двустволки: хлопок и низкий удар. volume — тише для дальнего выстрела. */
+  bang(volume = 1): void {
+    this.noise(0.32, 0.55 * volume, 1600, 'lowpass');
+    this.noise(0.06, 0.4 * volume, 4200, 'highpass');
+    this.sweep(110, 38, 0.3, 0.45 * volume, 'sine');
+  }
+
+  /** Лай: два коротких «гав». */
+  bark(volume = 1): void {
+    const ctx = this.running();
+    if (!ctx) return;
+    for (const delay of [0, 0.16]) {
+      this.sweep(520, 230, 0.11, 0.16 * volume, 'sawtooth', delay);
+      this.sweep(260, 150, 0.12, 0.12 * volume, 'square', delay);
+    }
+  }
+
+  /** Укус: щелчок зубов. */
+  bite(): void {
+    this.noise(0.05, 0.28, 2600, 'highpass');
+    this.sweep(300, 120, 0.08, 0.15, 'square');
+  }
+
+  /** Собаке подрезали лапы: визг. */
+  yelp(): void {
+    this.sweep(820, 1500, 0.18, 0.12, 'triangle');
+    this.sweep(1500, 700, 0.2, 0.08, 'triangle', 0.18);
+  }
+
+  /** Ружьё твоё: звонкий аккорд. */
+  ching(): void {
+    if (!this.running()) return;
+    this.tone(1318.5, 0, 0.35, 0.08, 'triangle');
+    this.tone(1760, 0.07, 0.45, 0.08, 'triangle');
+    this.tone(2637, 0.14, 0.5, 0.05, 'sine');
+  }
+
   /** Сменил инструмент: короткий сухой щелчок. */
   swap(): void {
     this.noise(0.05, 0.16, 2200, 'bandpass');

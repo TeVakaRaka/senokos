@@ -36,7 +36,13 @@ export function hashGame(g: Game): number {
     h = mixNumber(h, p.load);
     h = mixNumber(h, p.tool);
     h = mixNumber(h, p.toolCd);
+    h = mixNumber(h, p.wound);
     h = mixNumber(h, p.crawl);
+    h = mixNumber(h, p.down);
+    h = mixNumber(h, p.still);
+    h = mixNumber(h, p.fly);
+    h = mixNumber(h, p.flyX);
+    h = mixNumber(h, p.flyY);
     h = mixNumber(h, p.shield);
     h = mixNumber(h, p.stacked);
     h = mixNumber(h, p.delivered);
@@ -51,6 +57,11 @@ export function hashGame(g: Game): number {
     h = mixNumber(h, p.stolen);
     h = mixNumber(h, p.knocked);
     h = mixNumber(h, p.robbed);
+    h = mixNumber(h, p.shotHits);
+    h = mixNumber(h, p.shotDown);
+    h = mixNumber(h, p.dogsKilled);
+    h = mixNumber(h, p.dogCuts);
+    h = mixNumber(h, p.dogBites);
   }
 
   h = mixNumber(h, g.nextDropId);
@@ -61,6 +72,41 @@ export function hashGame(g: Game): number {
     h = mixNumber(h, d.x);
     h = mixNumber(h, d.y);
     h = mixNumber(h, d.kg);
+  }
+
+  // Магазин, ружьё, будки, собаки.
+  if (g.shop) {
+    h = mixNumber(h, g.shop.kg);
+    h = mixNumber(h, g.shop.sold ? 1 : 0);
+    h = mixNumber(h, g.shop.stamp);
+    for (let k = 0; k < g.shop.given.length; k++) {
+      h = mixNumber(h, g.shop.given[k]!);
+      h = mixNumber(h, g.shop.since[k]!);
+    }
+  }
+  if (g.gun) {
+    h = mixNumber(h, 1000 + g.gun.holder);
+    h = mixNumber(h, g.gun.x);
+    h = mixNumber(h, g.gun.y);
+    h = mixNumber(h, g.gun.cd);
+  }
+  h = mixNumber(h, g.spentKg);
+  for (let k = 0; k < g.kennels.length; k++) h = mixNumber(h, g.kennels[k]!.kg);
+  for (let k = 0; k < g.dogs.length; k++) {
+    const dog = g.dogs[k];
+    if (!dog) {
+      h = mixNumber(h, -1);
+      continue;
+    }
+    h = mixNumber(h, dog.x);
+    h = mixNumber(h, dog.y);
+    h = mixNumber(h, dog.fx);
+    h = mixNumber(h, dog.fy);
+    h = mixNumber(h, dog.speed);
+    h = mixNumber(h, dog.target);
+    h = mixNumber(h, dog.biteCd);
+    h = mixNumber(h, dog.crawl);
+    h = mixNumber(h, dog.shield);
   }
 
   const f = g.field;

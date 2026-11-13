@@ -24,6 +24,8 @@ export interface MatchResult {
   knocked: number; // кг, выбитых из чужих тюков
   stolen: number; // кг, утащенных из чужих стогов
   lost: number; // кг, утащенных из своего
+  shot: number; // скольких подстрелил из ружья
+  shotDown: number; // сколько раз подстрелили самого
   perks: number;
   wins: number; // побед всего, считая этот день (0 игр — строка не показывается)
   games: number;
@@ -87,6 +89,8 @@ export class Results {
           <div><dt>Выбил из тюков</dt><dd>${Math.round(r.knocked)} кг</dd></div>
           <div><dt>Утащил из стогов</dt><dd>${Math.round(r.stolen)} кг</dd></div>
           <div><dt>Утащили у тебя</dt><dd>${Math.round(r.lost)} кг</dd></div>
+          <div><dt>Подстрелил</dt><dd>${r.shot}</dd></div>
+          <div><dt>Подстрелили тебя</dt><dd>${r.shotDown}</dd></div>
           <div><dt>Улучшений</dt><dd>${r.perks}</dd></div>
           ${r.games > 0 ? `<div class="wide"><dt>Побед</dt><dd>${r.wins} из ${r.games}</dd></div>` : ''}
         </dl>

@@ -1,5 +1,5 @@
 // Точка входа для проверки «два движка»: боты играют полный день на 20 зёрнах — сначала
-// в одиночку, потом вдвоём друг против друга; для каждого забега печатается хеш состояния.
+// в одиночку, потом вдвоём друг против друга, потом вчетвером (на всех локациях); для каждого забега печатается хеш состояния.
 // Файл собирается в один скрипт без импортов и запускается и в Node (V8), и в jsc
 // (JavaScriptCore) — строки обязаны совпасть.
 
@@ -22,4 +22,11 @@ for (let seed = 1; seed <= 20; seed++) {
   const a = game.players[0]!;
   const b = game.players[1]!;
   out(`2 ${seed} ${hex8(hashGame(game))} ${Math.round(a.stacked)}:${Math.round(b.stacked)} ${a.hits + b.hits}`);
+}
+// Вчетвером: луг, огороды и река (локацию выбирает зерно), ружьё, собаки.
+for (let seed = 1; seed <= 6; seed++) {
+  const { game } = autoplay(seed, Infinity, DEFAULT_TUNING, 4);
+  const kg = game.players.map((p) => Math.round(p.stacked)).join(':');
+  const hits = game.players.reduce((n, p) => n + p.hits + p.shotHits, 0);
+  out(`4 ${seed} ${hex8(hashGame(game))} ${kg} ${hits}`);
 }
